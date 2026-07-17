@@ -1,0 +1,4 @@
+# Ignore specific backend OTP file
+backend/OTP.js
+backend/.env
+node_modules/
