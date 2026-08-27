@@ -1,5 +1,6 @@
 const { google } = require('googleapis');
-const { v4: uuidv4 } = require('uuid');
+// const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 
 const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,        
@@ -14,7 +15,7 @@ oAuth2Client.setCredentials({
 const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
 
 async function sendMail(email) {
-  const token = uuidv4();
+ const token = crypto.randomInt(100000, 1000000).toString();
 
   // FIX 1: Capitalized 'To:' with a colon
   const message = [
