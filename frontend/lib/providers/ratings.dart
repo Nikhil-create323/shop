@@ -15,14 +15,14 @@ class RatingsProvider extends Notifier<List<Rating>> {
         Uri.parse("$baseUrl/api/fetchSummary/$productId"),
       );
 
-      print("response : ${response.body}");
+      print("response returned by nodejs: ${response.body}");
 
+      final Map<String, dynamic> data = jsonDecode(response.body);
       if (response.statusCode == 200) {
-        final Map<String, dynamic> data = jsonDecode(response.body);
-        print(data['summary']);
-        return data['summary'] ?? "Not available";
+        return data["summary"] ?? "Not available";
       } else {
-        throw "Failed to fetch summary";
+        final message = data['message'] ?? data['error'] ?? 'Failed to fetch summary';
+        throw Exception(message.toString());
       }
     } catch (e) {
       print("fetchSummary error: $e");

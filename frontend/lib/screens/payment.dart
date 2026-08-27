@@ -1,9 +1,13 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_stripe/flutter_stripe.dart';
 import 'package:http/http.dart' as http;
 import 'package:dummy_apps/main.dart';
 import 'package:dummy_apps/widgets/drawer.dart';
+import 'package:flutter/foundation.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class Payment extends StatefulWidget {
   final int amount;
@@ -27,7 +31,33 @@ class _PaymentState extends State<Payment> {
         baseUrl = await getDynamicBaseUrl();
       }
 
-      // Backend endpoint that creates PaymentIntent
+      if (kIsWeb) {
+        final response = await http.post(
+          Uri.parse('${baseUrl}/api/create-checkout-session'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'amount': widget.amount}),
+        );
+
+        if (response.statusCode != 200) {
+          throw Exception('Unable to create checkout session');
+        }
+
+        final data = jsonDecode(response.body);
+        final checkoutUrl = data['url'];
+        if (checkoutUrl is! String || checkoutUrl.isEmpty) {
+          throw Exception('Checkout URL is missing');
+        }
+
+        final launched = await launchUrl(
+          Uri.parse(checkoutUrl),
+          webOnlyWindowName: '_self',
+        );
+        if (!launched) {
+          throw Exception('Unable to open Stripe Checkout');
+        }
+        return;
+      }
+
       final response = await http.post(
         Uri.parse('${baseUrl}/api/create-payment-intent'),
         headers: {'Content-Type': 'application/json'},
@@ -39,18 +69,26 @@ class _PaymentState extends State<Payment> {
       }
 
       final data = jsonDecode(response.body);
-
       final clientSecret = data['clientSecret'];
       final paymentIntentId = data['paymentIntentId'];
 
-      await Stripe.instance.initPaymentSheet(
-        paymentSheetParameters: SetupPaymentSheetParameters(
-          merchantDisplayName: 'My Store',
-          paymentIntentClientSecret: clientSecret,
-        ),
-      );
+      if (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS) {
+        // MOBILE: Use the native PaymentSheet on Android and iOS.
+        await Stripe.instance.initPaymentSheet(
+          paymentSheetParameters: SetupPaymentSheetParameters(
+            merchantDisplayName: 'My Store',
+            paymentIntentClientSecret: clientSecret,
+          ),
+        );
 
-      await Stripe.instance.presentPaymentSheet();
+        await Stripe.instance.presentPaymentSheet();
+      } else {
+        throw UnsupportedError(
+          'Stripe payments are not supported on ${defaultTargetPlatform.name}. '
+          'Run the web build in a browser or use Android/iOS.',
+        );
+      }
 
       if (!mounted) return;
 
@@ -77,7 +115,6 @@ class _PaymentState extends State<Payment> {
 
       print("error : ${e}");
 
-      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Payment failed: $e')));

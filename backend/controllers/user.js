@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
+const https = require('https');
 const bcrypt = require('bcrypt');
 const twilio = require('twilio');
 
@@ -15,6 +16,61 @@ const {sendMail} = require('./gmail');
 
 const SECRET_KEY = process.env.SECRET_KEY || 'your-secret-key-change-this';
 
+const fetchGoogleOAuthPayload = (url) => new Promise((resolve, reject) => {
+  https.get(url, (response) => {
+    let data = '';
+
+    response.on('data', (chunk) => {
+      data += chunk;
+    });
+
+    response.on('end', () => {
+      try {
+        const parsed = JSON.parse(data);
+        if (response.statusCode >= 400) {
+          reject(new Error(parsed.error_description || parsed.error || 'Google OAuth verification failed'));
+          return;
+        }
+        resolve(parsed);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }).on('error', reject);
+});
+
+const verifyGoogleOAuthToken = async (credential) => {
+  if (typeof credential !== 'string' || !credential.trim()) {
+    throw new Error('Google OAuth credential is required');
+  }
+
+  const token = credential.trim();
+  const googleClientId = process.env.GOOGLE_CLIENT_ID;
+  if (!googleClientId) {
+    throw new Error('GOOGLE_CLIENT_ID is not configured');
+  }
+
+  const tokenInfoUrl = token.split('.').length === 3
+    ? `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`
+    : `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(token)}`;
+
+  const payload = await fetchGoogleOAuthPayload(tokenInfoUrl);
+
+  if (!payload || !payload.sub) {
+    throw new Error('Google OAuth token verification failed');
+  }
+
+  if (payload.aud && payload.aud !== googleClientId) {
+    throw new Error('Google OAuth audience mismatch');
+  }
+
+  return {
+    googleId: payload.sub,
+    email: payload.email || null,
+    name: payload.name || payload.given_name || null,
+    profileImage: payload.picture || null,
+  };
+};
 
 const signUp = async (req, res, next) => {
     try {
@@ -130,10 +186,10 @@ const logIn = async (req, res, next)  =>  {
     { expiresIn: "14d" }
   );
 
-    const decoded = jwt.verify(token, SECRET_KEY);
-    console.log("userID: ", decoded.userId);
-    console.log("user name: ", curUser.name);
-    console.log("token: ", token);
+    // const decoded = jwt.verify(token, SECRET_KEY);
+    // console.log("userID: ", decoded.userId);
+    // console.log("user name: ", curUser.name);
+    // console.log("token: ", token);
 
     res.json({
       message: `Hello ${curUser.name}`,
@@ -150,7 +206,6 @@ const logIn = async (req, res, next)  =>  {
     res.status(500).json({ message: "Server error", error: e.message });
   }
 };
-
 
 const logOut = async (req, res, next) => {
   const token = req.body.token;
@@ -177,163 +232,46 @@ const logOut = async (req, res, next) => {
   }
 }
 
-// Send OTP via Twilio
-const sendOtp = async (req, res) => {
-  const { phone } = req.body;
-
-  if (!phone) {
-    return res.status(400).json({
-      success: false,
-      message: 'Phone number is required.'
-    });
-  }
-
-  try {
-    const otp = generateOTP();
-    const expiryTime = Date.now() + 5 * 60 * 1000; // 5 minutes
-
-    otpStore[phone] = {
-      otp,
-      expiresAt: expiryTime
-    };
-
-    console.log(`[OTP Services] Generated OTP for ${phone}: ${otp}`);
-
-    if (twilioClient) {
-      let formattedPhone = phone.trim();
-      if (!formattedPhone.startsWith('+')) {
-        formattedPhone = `+91${formattedPhone}`; // Default to India country code
-      }
-
-      await twilioClient.messages.create({
-        body: `Your verification code is ${otp}.`,
-        from: twilioPhoneNumber,
-        to: formattedPhone
-      });
-
-      return res.json({
-        success: true,
-        message: 'OTP sent successfully via SMS'
-      });
-    } else {
-      // Development mode
-      return res.json({
-        success: true,
-        message: 'OTP sent successfully (Development Mode)',
-        otp: otp
-      });
-    }
-
-  } catch (error) {
-    console.error("Failed to send OTP:", error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to send OTP',
-      error: error.message
-    });
-  }
-};
-
-// Verify OTP and Login/Signup
-const verifyOtp = async (req, res) => {
-  const { phone, otp, name } = req.body;
-
-  if (!phone || !otp) {
-    return res.status(400).json({ success: false, message: 'Phone number and OTP are required.' });
-  }
-
-  const record = otpStore[phone];
-
-  if (!record) {
-    return res.status(400).json({ success: false, message: 'No OTP requested for this number.' });
-  }
-
-  // Check expiration
-  if (Date.now() > record.expiresAt) {
-    delete otpStore[phone]; // Clean up
-    return res.status(400).json({ success: false, message: 'OTP has expired.' });
-  }
-
-  // Check matching OTP
-  if (record.otp !== otp) {
-    return res.status(400).json({ success: false, message: 'Incorrect OTP.' });
-  }
-
-  // OTP verified! Clean up
-  delete otpStore[phone];
-
-  try {
-    let user = await User.findOne({ phone: phone.trim() });
-
-    if (user) {
-      // Link phone provider if not already present
-      if (!user.providers.includes("phone")) {
-        user.providers.push("phone");
-      }
-      user.isPhoneVerified = true;
-      user.lastLogin = new Date();
-      await user.save();
-    } else {
-      // Create new user
-      user = await User.create({
-        name: name || `User ${phone.slice(-4)}`,
-        phone: phone.trim(),
-        isPhoneVerified: true,
-        providers: ["phone"],
-        lastLogin: new Date()
-      });
-    }
-
-    const token = jwt.sign(
-      { userId: user._id },
-      SECRET_KEY,
-      { expiresIn: "24h" }
-    );
-
-    return res.json({
-      success: true,
-      message: 'OTP verified successfully!',
-      token: token,
-      user: {
-        id: user._id,
-        name: user.name,
-        phone: user.phone,
-        providers: user.providers
-      }
-    });
-
-  } catch (error) {
-    console.error("verifyOtp error:", error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to verify OTP and login',
-      error: error.message
-    });
-  }
-};
-
 // Google OAuth unified Sign-In / Sign-Up
 const googleAuth = async (req, res) => {
-  const { googleId, email, name, profileImage } = req.body;
-
-  if (!googleId) {
-    return res.status(400).json({ success: false, message: 'Google ID is required.' });
-  }
+  const { googleId, email, name, profileImage, credential, idToken, accessToken } = req.body;
+  const googleCredential = credential || idToken || accessToken;
 
   try {
-    let user = await User.findOne({ googleId });
+    let verifiedProfile = null;
+    const allowLegacyDevAuth = process.env.NODE_ENV !== 'production' && process.env.ALLOW_DEV_GOOGLE_AUTH === 'true';
 
-    if (!user && email) {
-      user = await User.findOne({ email: email.toLowerCase().trim() });
+    if (googleCredential) {
+      verifiedProfile = await verifyGoogleOAuthToken(googleCredential);
+    } else if (!allowLegacyDevAuth) {
+      return res.status(401).json({
+        success: false,
+        message: 'Google OAuth credential is required.'
+      });
+    }
+
+    const resolvedGoogleId = verifiedProfile?.googleId || googleId;
+    const resolvedEmail = verifiedProfile?.email || email;
+    const resolvedName = verifiedProfile?.name || name;
+    const resolvedProfileImage = verifiedProfile?.profileImage || profileImage;
+
+    if (!resolvedGoogleId) {
+      return res.status(400).json({ success: false, message: 'Google ID is required.' });
+    }
+
+    let user = await User.findOne({ googleId: resolvedGoogleId });
+
+    if (!user && resolvedEmail) {
+      user = await User.findOne({ email: resolvedEmail.toLowerCase().trim() });
       if (user) {
-        // Link google credentials to existing account
-        user.googleId = googleId;
-        if (!user.providers.includes("google")) {
-          user.providers.push("google");
+        user.googleId = resolvedGoogleId;
+        if (!user.providers.includes('google')) {
+          user.providers.push('google');
         }
+
         user.isEmailVerified = true;
-        if (profileImage && !user.profileImage) {
-          user.profileImage = profileImage;
+        if (resolvedProfileImage && !user.profileImage) {
+          user.profileImage = resolvedProfileImage;
         }
         user.lastLogin = new Date();
         await user.save();
@@ -341,14 +279,13 @@ const googleAuth = async (req, res) => {
     }
 
     if (!user) {
-      // Create new user
       user = await User.create({
-        name: name || 'Google User',
-        email: email ? email.toLowerCase().trim() : undefined,
-        googleId,
-        profileImage: profileImage || null,
-        isEmailVerified: email ? true : false,
-        providers: ["google"],
+        name: resolvedName || 'Google User',
+        email: resolvedEmail ? resolvedEmail.toLowerCase().trim() : undefined,
+        googleId: resolvedGoogleId,
+        profileImage: resolvedProfileImage || null,
+        isEmailVerified: resolvedEmail ? true : false,
+        providers: ['google'],
         lastLogin: new Date()
       });
     } else {
@@ -359,13 +296,13 @@ const googleAuth = async (req, res) => {
     const token = jwt.sign(
       { userId: user._id },
       SECRET_KEY,
-      { expiresIn: "24h" }
+      { expiresIn: '24h' }
     );
 
     return res.json({
       success: true,
       message: 'Google authentication successful',
-      token: token,
+      token,
       user: {
         id: user._id,
         name: user.name,
@@ -374,10 +311,9 @@ const googleAuth = async (req, res) => {
         providers: user.providers
       }
     });
-
   } catch (error) {
-    console.error("googleAuth error:", error);
-    return res.status(500).json({
+    console.error('googleAuth error:', error);
+    return res.status(401).json({
       success: false,
       message: 'Google authentication failed',
       error: error.message
@@ -653,11 +589,8 @@ const resetPassword = async (req, res, next) => {
 module.exports = {
   signUp,
   logIn,
-  sendOtp,
-  verifyOtp,
   googleAuth,
   logOut,
   resetPassword,
-  // changePassword,
   forgotPassword,
 };

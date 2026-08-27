@@ -11,7 +11,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:dummy_apps/providers/otp.dart';
 
 import 'package:flutter_svg/flutter_svg.dart';
-import 'package:jwt_decoder/jwt_decoder.dart';
 import 'package:dummy_apps/widgets/drawer.dart';
 import 'package:dummy_apps/screens/forgot-password.dart';
 import 'package:dummy_apps/main.dart' show baseUrl;
@@ -142,7 +141,6 @@ class _AuthScreenState extends State<AuthScreen>
             print("User ID: ${user['id']}");
             print("User Name: ${user['name']}");
           }
-          print("Token: $token");
           _showSnackBar(
             _isSignUp ? 'Account created successfully!' : 'Welcome back!',
           );
@@ -1031,7 +1029,6 @@ class _AuthScreenState extends State<AuthScreen>
   //     setState(() => _isLoadingPhone = false);
   //   }
   // }
-
   // Verify Phone OTP
   // Future<void> _verifyOtpAndLogin() async {
   

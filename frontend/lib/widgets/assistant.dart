@@ -1,5 +1,4 @@
 import 'dart:convert';
-
 import 'package:dummy_apps/providers/assistant_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -84,8 +83,20 @@ class _FloatingSideChatState extends ConsumerState<FloatingSideChat> {
       });
     } catch (e) {
       if (!mounted) return;
+
+      final message = e.toString().replaceFirst('Exception: ', '').trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            message.isNotEmpty
+                ? message
+                : 'Unable to search products right now.',
+          ),
+        ),
+      );
+
       setState(() {
-        _lines.add(_ChatLine(text: 'Search failed: $e', isUser: false));
+        _lines.add(_ChatLine(text: 'Search failed: $message', isUser: false));
       });
     } finally {
       if (mounted) {
@@ -165,7 +176,9 @@ class _FloatingSideChatState extends ConsumerState<FloatingSideChat> {
                                 horizontal: 12,
                                 vertical: 10,
                               ),
-                              constraints: BoxConstraints(maxWidth: panelW - 40),
+                              constraints: BoxConstraints(
+                                maxWidth: panelW - 40,
+                              ),
                               decoration: BoxDecoration(
                                 color: m.isUser
                                     ? Theme.of(
@@ -265,9 +278,7 @@ class _FloatingSideChatState extends ConsumerState<FloatingSideChat> {
           decoration: BoxDecoration(
             border: _open
                 ? Border(
-                    left: BorderSide(
-                      color: Theme.of(context).dividerColor,
-                    ),
+                    left: BorderSide(color: Theme.of(context).dividerColor),
                   )
                 : null,
           ),

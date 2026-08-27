@@ -81,11 +81,13 @@ class ProductNotifier extends Notifier<List<Product>> {
       body: jsonEncode({'prompt': prompt}),
     );
 
-    final responseData = jsonDecode(response.body) as Map<String, dynamic>;
+    final responseData = response.body.isEmpty
+        ? <String, dynamic>{}
+        : jsonDecode(response.body) as Map<String, dynamic>;
 
     if (response.statusCode != 200) {
-      final message = responseData['message'] ?? response.body;
-      throw Exception('Search failed: $message');
+      final message = responseData['message'] ?? 'Unable to search products right now.';
+      throw Exception(message.toString());
     }
 
     final List<dynamic> products = responseData['products'] ?? [];

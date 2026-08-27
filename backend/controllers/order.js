@@ -8,19 +8,19 @@ const stripe = require("stripe")(
 
 const SECRET_KEY = process.env.SECRET_KEY || 'your-secret-key-change-this';
 
-const getAuthenticatedUserId = (req) => {
-  const authHeader = req.headers.authorization || req.headers.Authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+// const getAuthenticatedUserId = (req) => {
+//   const authHeader = req.headers.authorization || req.headers.Authorization;
+//   if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
 
-  try {
-    const token = authHeader.substring(7).trim();
-    const decoded = jwt.verify(token, SECRET_KEY);
-    return decoded.userId || decoded.id || null;
-  } catch (error) {
-    console.error('JWT verification failed:', error.message);
-    return null;
-  }
-};
+//   try {
+//     const token = authHeader.substring(7).trim();
+//     const decoded = jwt.verify(token, SECRET_KEY);
+//     return decoded.userId || decoded.id || null;
+//   } catch (error) {
+//     console.error('JWT verification failed:', error.message);
+//     return null;
+//   }
+// };
 
 
 const createPaymentIntent = async (req, res, next) => {
@@ -45,6 +45,38 @@ const createPaymentIntent = async (req, res, next) => {
   } catch (error) {
     console.error('Error creating payment intent:', error);
     res.status(500).json({ error: 'Failed to create payment intent' });
+  }
+};
+
+const createCheckoutSession = async (req, res, next) => {
+  try {
+    const { amount } = req.body;
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({
+        error: 'A valid amount is required to create a checkout session.',
+      });
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [{
+        price_data: {
+          currency: 'inr',
+          product_data: { name: 'Store purchase' },
+          unit_amount: amount,
+        },
+        quantity: 1,
+      }],
+      success_url: `${frontendUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${frontendUrl}/payment-cancelled`,
+    });
+
+    return res.status(200).json({ url: session.url });
+  } catch (error) {
+    console.error('Error creating checkout session:', error);
+    return res.status(500).json({ error: 'Failed to create checkout session' });
   }
 };
 
@@ -237,5 +269,6 @@ module.exports = {
   placeOrder,
   fetchOrders,
   createPaymentIntent,
+  createCheckoutSession,
 }
 

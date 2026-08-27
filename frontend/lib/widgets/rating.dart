@@ -24,6 +24,9 @@ class _RatingWidgetState extends ConsumerState<RatingWidget> {
   String _currentUserName = 'Anonymous';
   String _currentUserId = '1';
   bool _isLoggedIn = false;
+  bool _isSummaryLoading = false;
+  String? _summaryText;
+  bool _summaryLoaded = false;
 
   @override
   void initState() {
@@ -62,6 +65,33 @@ class _RatingWidgetState extends ConsumerState<RatingWidget> {
   void dispose() {
     controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadSummaryIfNeeded() async {
+    if (_summaryLoaded || _isSummaryLoading) return;
+
+    setState(() {
+      _isSummaryLoading = true;
+    });
+
+    try {
+      final summary = await ref
+          .read(ratingsProvider.notifier)
+          .fetchSummary(widget.product.id.toString());
+
+      if (!mounted) return;
+
+      setState(() {
+        _summaryText = summary;
+        _summaryLoaded = true;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSummaryLoading = false;
+        });
+      }
+    }
   }
 
   Future<void> addReview() async {
@@ -105,35 +135,30 @@ class _RatingWidgetState extends ConsumerState<RatingWidget> {
       children: [
         ExpansionTile(
           title: const Text('Summarized Review'),
+          onExpansionChanged: (expanded) {
+            if (expanded) {
+              _loadSummaryIfNeeded();
+            }
+          },
           children: [
-            FutureBuilder<String>(
-              future: ref
-                  .read(ratingsProvider.notifier)
-                  .fetchSummary(widget.product.id.toString()),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: CircularProgressIndicator(),
-                  );
-                }
-
-                if (snapshot.hasError) {
-                  return const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: Text('Failed to load summary'),
-                  );
-                }
-
-                return Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Text(
-                    snapshot.data ?? "Not available",
-                    style: const TextStyle(fontSize: 15),
-                  ),
-                );
-              },
-            ),
+            if (_isSummaryLoading)
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: CircularProgressIndicator(),
+              )
+            else if (_summaryText != null)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  _summaryText!,
+                  style: const TextStyle(fontSize: 15),
+                ),
+              )
+            else
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: Text('Tap to load summary'),
+              ),
           ],
         ),
 

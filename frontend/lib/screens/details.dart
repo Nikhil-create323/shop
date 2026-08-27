@@ -63,7 +63,9 @@ class Details extends ConsumerWidget {
                   if (product.stock == 0)
                     Text(
                       'Out of stock',
-                      style: TextStyle(color: Theme.of(context).colorScheme.error),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
                     ),
                 ],
               ),
@@ -99,11 +101,14 @@ class Details extends ConsumerWidget {
 
     final paymentResult = await Navigator.of(context).push<dynamic>(
       MaterialPageRoute(
-        builder: (_) => Payment(amount: (product.price * quantity * 100).round()),
+        builder: (_) =>
+            Payment(amount: (product.price * quantity * 100).round()),
       ),
     );
 
-    if (paymentResult == null || paymentResult is! Map || paymentResult['success'] != true) {
+    if (paymentResult == null ||
+        paymentResult is! Map ||
+        paymentResult['success'] != true) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Payment was not completed')),
@@ -114,7 +119,9 @@ class Details extends ConsumerWidget {
     final paymentIntentId = paymentResult['paymentIntentId'] as String?;
 
     try {
-      await ref.read(ordersProvider.notifier).placeOrder(product.id, quantity, paymentIntentId: paymentIntentId);
+      await ref
+          .read(ordersProvider.notifier)
+          .placeOrder(product.id, quantity, paymentIntentId: paymentIntentId);
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Order placed successfully!')),

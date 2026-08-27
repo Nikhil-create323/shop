@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:dummy_apps/screens/payment.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 const storage = FlutterSecureStorage();
 
@@ -24,8 +25,6 @@ class _Shop extends ConsumerState<Shop> {
   Future<void> _addToCart(BuildContext context, Product prod) async {
     try {
       var token = await storage.read(key: "token");
-
-      print('Token: $token');
 
       if (token == null || !await AuthService.isLoggedIn()) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -263,11 +262,19 @@ class _Shop extends ConsumerState<Shop> {
                                         top: Radius.circular(20),
                                       ),
 
-                                      child: Image.network(
-                                        prod.imageUrl,
+                                      child: CachedNetworkImage(
+                                        imageUrl: prod.imageUrl,
                                         width: double.infinity,
                                         fit: BoxFit.cover,
-                                        errorBuilder: (_, __, ___) =>
+                                        // Show a loading indicator while the image downloads
+                                        placeholder: (context, url) =>
+                                            const Center(
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                              ),
+                                            ),
+                                        // Handles broken URLs, missing images, or SSL errors
+                                        errorWidget: (context, url, error) =>
                                             const Center(
                                               child: Icon(
                                                 Icons.image_not_supported,

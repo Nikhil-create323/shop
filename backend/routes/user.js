@@ -23,7 +23,7 @@ const assistantLimiter = rateLimit({
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { message: 'Too many search requests, please slow down.' },
+  message: { message: 'Too many assistant requests. Please wait a minute and try again.' },
 });
 
 
@@ -67,21 +67,21 @@ router.post(
   },
 );
 // router.get("/oauth2callback", async (req, res) => {
-  // const code = req.query.code;
+//   const code = req.query.code;
 
-  // const response = await fetch("https://oauth2.googleapis.com/token", {
-  //   method: "POST",
-  //   headers: {
-  //     "Content-Type": "application/x-www-form-urlencoded",
-  //   },
-  //   body: new URLSearchParams({
-  //     client_id: process.env.GOOGLE_CLIENT_ID,
-  //     client_secret: process.env.GOOGLE_CLIENT_SECRET,
-  //     code: "4/0AdkVLPxiB399qiy92YoA1jqZ31XLcVfUvuhjAqnCEnI3EwF0dD9tnZjZh4k8b3_XD0pKJw&scope",
-  //     grant_type: "authorization_code",
-  //     redirect_uri: "http://localhost:3000/oauth2callback",
-  //   }),
-  // });
+//   const response = await fetch("https://oauth2.googleapis.com/token", {
+//     method: "POST",
+//     headers: {
+//       "Content-Type": "application/x-www-form-urlencoded",
+//     },
+//     body: new URLSearchParams({
+//       client_id: process.env.GOOGLE_CLIENT_ID,
+//       client_secret: process.env.GOOGLE_CLIENT_SECRET,
+//       code: "4/0AdkVLPxiB399qiy92YoA1jqZ31XLcVfUvuhjAqnCEnI3EwF0dD9tnZjZh4k8b3_XD0pKJw&scope",
+//       grant_type: "authorization_code",
+//       redirect_uri: "http://localhost:3000/oauth2callback",
+//     }),
+//   });
 
 //   const tokens = await response.json();
 
@@ -89,9 +89,6 @@ router.post(
 //   res.send(tokens);
 // });
 
-
-router.post('/api/send-otp', authLimiter, userController.sendOtp);
-router.post('/api/verify-otp', authLimiter, userController.verifyOtp);
 router.post('/api/google-auth', authLimiter, userController.googleAuth);
 router.post('/forgot-password', authLimiter, userController.forgotPassword);
 router.post('/reset-password', authLimiter, userController.resetPassword);
@@ -103,9 +100,10 @@ router.post('/addRating/:productId', ratingController.addRating);
 router.get('/api/rating/:productId', ratingController.fetchRatings);
 router.post('/api/rating/:ratingId/upvote', ratingController.upvote);
 router.post('/api/rating/:ratingId/downvote', ratingController.downvote);
-router.get('/api/fetchSummary/:prodId', ratingController.fetchSummaryFromN8N);
+router.get('/api/fetchSummary/:productId', ratingController.fetchSummaryFromN8N);
 router.post('/api/assistant', assistantLimiter, assistantController.searchFilter);
 router.post('/api/create-payment-intent', orderController.createPaymentIntent);
+router.post('/api/create-checkout-session', orderController.createCheckoutSession);
 
 router.get('/fetchCart', cart.fetchCart);
 router.get('/fetchRatings/:productId', ratingController.fetchRatings);

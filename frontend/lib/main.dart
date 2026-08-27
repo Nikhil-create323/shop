@@ -23,6 +23,16 @@ import 'package:flutter_stripe/flutter_stripe.dart';
 const storage = FlutterSecureStorage();
 String baseUrl = '';
 
+//to bypass SSL certificate verification for development purposes
+class MyHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)
+      ..badCertificateCallback =
+          (X509Certificate cert, String host, int port) => true;
+  }
+}
+
 Future<String> getDynamicBaseUrl() async {
   if (kIsWeb) return 'http://localhost:3000';
 
@@ -105,11 +115,9 @@ void main() async {
       'pk_test_51TkGkD2Q5c5Bkb9qazDd3nFvnc82QL01rjFSbBnzmZwpJL42OtHPnmp56r8ubAdwkoBmIJ3CYbNVolue26OK6kpQ00VJTFfdyw';
 
   try {
-    print('Before applySettings');
-
+    // print('Before applySettings');
     await Stripe.instance.applySettings();
-
-    print('After applySettings');
+    // print('After applySettings');
   } catch (e, st) {
     print('Stripe error: $e');
     print(st);
@@ -117,6 +125,8 @@ void main() async {
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   baseUrl = await getDynamicBaseUrl();
+
+  HttpOverrides.global = MyHttpOverrides();
   runApp(ProviderScope(child: MyApp()));
 }
 

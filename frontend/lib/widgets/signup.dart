@@ -18,7 +18,6 @@ Future<void> signUp(name, email, password) async {
 
   if (response.statusCode == 201) {
     final data = jsonDecode(response.body);
-    print(data);
     final token = data['token'];
 
     if (token != null && token is String) {
