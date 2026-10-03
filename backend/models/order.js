@@ -35,6 +35,29 @@ const orderSchema = new Schema({
     required: true
   },
 
+  paymentIntentId: {
+    type: String,
+    required: false,
+  },
+
+  status: {
+    type: String,
+    enum: [
+      'placed',
+      'cancelling',
+      'cancelled',
+      'return_requested',
+      'return_processing',
+      'return_rejected',
+      'returned',
+    ],
+    default: 'placed',
+  },
+
+  refundId: {
+    type: String,
+  },
+
   orderedAt: {
     type: Date,
     default: Date.now

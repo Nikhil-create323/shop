@@ -1,10 +1,30 @@
-const Product = require('../models/product')
+const jwt = require('jsonwebtoken');
+const Product = require('../models/product');
 const Cart = require('../models/cart');
+
+const SECRET_KEY = process.env.SECRET_KEY || 'your-secret-key-change-this';
+
+const getAuthenticatedUserId = (req) => {
+  const authHeader = req.headers.authorization || req.headers.Authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+
+  try {
+    const token = authHeader.substring(7).trim();
+    const decoded = jwt.verify(token, SECRET_KEY);
+    return decoded.userId || decoded.id || null;
+  } catch (error) {
+    return null;
+  }
+};
 
 const addToCart = async (req, res) => {
   try {
     const { prodId } = req.body;
-    const user = req.body.user;
+    const userId = getAuthenticatedUserId(req);
+
+    if (!userId) {
+      return res.status(401).json({ message: 'Authentication required to add to cart' });
+    }
     
     const prodIdStr = prodId != null ? String(prodId) : '';
 
@@ -14,19 +34,21 @@ const addToCart = async (req, res) => {
       });
     }
 
-    const existing = await Cart.findOne({ prodId: prodIdStr });
+    const existing = await Cart.findOne({ prodId: prodIdStr, userID: userId });
 
     if (existing) {
       existing.quantity += 1;
       await existing.save();
     } else {
       await Cart.create({
+        userID: userId,
         prodId: prodIdStr,
         quantity: 1,
+        user: userId,
       });
     }
 
-    const fullCartList = await Cart.find();
+    const fullCartList = await Cart.find({ userID: userId });
 
     res.status(200).json({
       message: 'Cart updated successfully',
@@ -43,7 +65,15 @@ const addToCart = async (req, res) => {
 
 const fetchCart = async (req, res) => {
   try {
-    const cart = await Cart.find();
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(200).json({
+        message: 'Cart fetched successfully',
+        data: [],
+      });
+    }
+
+    const cart = await Cart.find({ userID: userId });
 
     return res.status(200).json({
       message: 'Cart fetched successfully',
@@ -60,6 +90,12 @@ const fetchCart = async (req, res) => {
 const removeFromCart = async (req, res) => {
   try {
     const { prodId, removeAll } = req.body;
+    const userId = getAuthenticatedUserId(req);
+
+    if (!userId) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
+
     const prodIdStr = prodId != null ? String(prodId) : '';
 
     if (!prodIdStr) {
@@ -68,7 +104,7 @@ const removeFromCart = async (req, res) => {
       });
     }
 
-    const cartItem = await Cart.findOne({ prodId: prodIdStr });
+    const cartItem = await Cart.findOne({ prodId: prodIdStr, userID: userId });
 
     if (!cartItem) {
       return res.status(404).json({
@@ -77,15 +113,15 @@ const removeFromCart = async (req, res) => {
     }
 
     if (removeAll === true || removeAll === 'true') {
-      await Cart.deleteOne({ prodId: prodIdStr });
+      await Cart.deleteOne({ prodId: prodIdStr, userID: userId });
     } else if (cartItem.quantity > 1) {
       cartItem.quantity -= 1;
       await cartItem.save();
     } else {
-      await Cart.deleteOne({ prodId: prodIdStr });
+      await Cart.deleteOne({ prodId: prodIdStr, userID: userId });
     }
 
-    const fullCartList = await Cart.find();
+    const fullCartList = await Cart.find({ userID: userId });
 
     return res.status(200).json({
       message: 'Product removed from cart successfully',
@@ -102,17 +138,15 @@ const removeFromCart = async (req, res) => {
 
 const clearCart = async (req, res) => {
   try {
-    const cartItems =await Cart.deleteMany({ user: req.user.id });
-    if(cart.deletedCount > 0) {
-      return res.status(200).json({
-        message: 'Cart cleared successfully',
-      });
-
-    } else {
-      return res.status(404).json({
-        message: 'No items found in the cart to clear',
-      });
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ message: 'Authentication required' });
     }
+
+    await Cart.deleteMany({ userID: userId });
+    return res.status(200).json({
+      message: 'Cart cleared successfully',
+    });
 
   } catch (err) {
     return res.status(500).json({
@@ -122,4 +156,4 @@ const clearCart = async (req, res) => {
   }
 }
 
-module.exports = {addToCart, fetchCart, removeFromCart};
+module.exports = {addToCart, fetchCart, removeFromCart, clearCart};

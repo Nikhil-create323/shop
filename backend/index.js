@@ -1,6 +1,6 @@
 // 1. ENVIRONMENT CONFIGURATION
 require('dotenv').config();
-const Mailer = require('./utils/mailer.js');
+// const Mailer = require('./utils/mailer.js');
 const dns = require('dns');
 
 dns.setDefaultResultOrder("ipv4first");
@@ -10,17 +10,17 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
-const jwt = require('jsonwebtoken');
+// const jwt = require('jsonwebtoken');
 const { google } = require('googleapis');
 
 // 3. LOCAL MODELS & ROUTES
-const User = require('./models/user.js');
+// const User = require('./models/user.js');
 // const Cart = require('./models/cart.js');
 const userRoutes = require('./routes/user.js');
 
 // 4. APP INITIALIZATION & CONSTANTS
 const app = express();
-const SECRET_KEY = "secret key";
+// const SECRET_KEY = "secret key";
 
 
 
@@ -70,7 +70,7 @@ app.get('/oauth2callback', async (req, res) => {
   }
 });
 
-const gmailController = require('./controllers/gmail.js');
+// const gmailController = require('./controllers/gmail.js');
 
 
 app.use(userRoutes); // Injected User Routes

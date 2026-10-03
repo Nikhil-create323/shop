@@ -104,6 +104,8 @@ router.get('/api/fetchSummary/:productId', ratingController.fetchSummaryFromN8N)
 router.post('/api/assistant', assistantLimiter, assistantController.searchFilter);
 router.post('/api/create-payment-intent', orderController.createPaymentIntent);
 router.post('/api/create-checkout-session', orderController.createCheckoutSession);
+router.get('/api/checkout-success', orderController.checkoutSuccess);
+router.get('/api/checkout-cancelled', orderController.checkoutCancelled);
 
 router.get('/fetchCart', cart.fetchCart);
 router.get('/fetchRatings/:productId', ratingController.fetchRatings);
@@ -114,6 +116,8 @@ router.get('/fetchOrders', orderController.fetchOrders);
 
 router.post('/placeOrder', orderController.placeOrder);
 router.post('/placeCartOrder', orderController.placeCartOrder);
+router.post('/cancelOrder/:orderId', orderController.cancelOrder);
+router.post('/requestReturn/:orderId', orderController.requestReturn);
 
 
 router.post('/addToCart', cart.addToCart);
@@ -122,6 +126,14 @@ router.post('/removeFromCart', cart.removeFromCart);
 
 router.get('/fetchProducts', productController.fetchProducts);
 router.post('/seedProducts', productController.seedProducts);
+
+// Admin Routes
+router.post('/api/admin/products', productController.createProduct);
+router.put('/api/admin/products/:id', productController.updateProduct);
+router.delete('/api/admin/products/:id', productController.deleteProduct);
+router.get('/api/admin/dashboard', productController.getAdminDashboardStats);
+router.get('/api/admin/return-requests', orderController.fetchReturnRequests);
+router.post('/api/admin/return-requests/:orderId', orderController.processReturnRequest);
 
 // router.get('/email', userController.authUrl);
 module.exports = router;

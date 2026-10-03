@@ -148,11 +148,16 @@ const signUp = async (req, res, next) => {
 };
 
 const logIn = async (req, res, next)  =>  {
-  const { email, password } = req.body;
-  console.log("Received login request for:", email);
+  const { email, password, role } = req.body;
+  console.log("Received login request for:", email, "with role:", role);
 
   if (typeof password !== 'string' || password.length > 128) {
     return res.status(400).json({ message: 'Password must be 128 characters or fewer' });
+  }
+
+  const requestedRole = (role || 'user').toString().trim().toLowerCase();
+  if (!['user', 'admin'].includes(requestedRole)) {
+    return res.status(400).json({ message: 'Invalid role selected for login.' });
   }
 
   try {
@@ -169,6 +174,13 @@ const logIn = async (req, res, next)  =>  {
       });
     }
 
+    const accountRole = (curUser.role || 'user').toString().toLowerCase();
+    if (accountRole !== requestedRole) {
+      return res.status(403).json({
+        message: `This account is registered as ${accountRole}. Please login as ${accountRole}.`
+      });
+    }
+
     const ismatch = await bcrypt.compare(password, curUser.password);
     
     if (!ismatch) {
@@ -178,18 +190,11 @@ const logIn = async (req, res, next)  =>  {
     curUser.lastLogin = new Date();
     await curUser.save();
 
-    const token = jwt.sign(    {
+    const token = jwt.sign({
       userId: curUser._id,
       name: curUser.name,
-    },
-    SECRET_KEY,
-    { expiresIn: "14d" }
-  );
-
-    // const decoded = jwt.verify(token, SECRET_KEY);
-    // console.log("userID: ", decoded.userId);
-    // console.log("user name: ", curUser.name);
-    // console.log("token: ", token);
+      role: curUser.role,
+    }, SECRET_KEY, { expiresIn: "14d" });
 
     res.json({
       message: `Hello ${curUser.name}`,
@@ -197,7 +202,7 @@ const logIn = async (req, res, next)  =>  {
       user: {
         id: curUser._id,
         name: curUser.name,
-        // email: curUser.email,
+        role: curUser.role,
       }
     });
 

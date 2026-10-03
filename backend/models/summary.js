@@ -11,6 +11,7 @@ const summarySchema = new Schema({
         required: true,
         index: true
     },
+    
     buffer: {
         type: [String],
         default: []

@@ -51,7 +51,6 @@ const userSchema = new Schema({
   // Connected Login Methods
   // ["email"]
   // ["google"]
-  // ["phone"]
   // ["google", "email"]
   providers: {
     type: [String],
