@@ -1,12 +1,11 @@
 import 'package:dummy_apps/model/product.dart';
 import 'package:dummy_apps/providers/cart_provider.dart';
-import 'package:dummy_apps/providers/orders.dart';
+import 'package:dummy_apps/providers/order.dart';
 import 'package:dummy_apps/providers/products_provider.dart';
-import 'package:dummy_apps/utils/auth-service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:dummy_apps/widgets/drawer.dart';
-import 'package:dummy_apps/screens/payment.dart';
+import 'package:dummy_apps/widgets/product_offer_price.dart';
 
 class CartViewItem {
   final Product product;
@@ -23,8 +22,6 @@ class CartWidget extends ConsumerStatefulWidget {
 }
 
 class _CartWidgetState extends ConsumerState<CartWidget> {
-  bool _orderingItem = false;
-
   @override
   void initState() {
     super.initState();
@@ -51,77 +48,11 @@ class _CartWidgetState extends ConsumerState<CartWidget> {
     }
   }
 
-  Future<void> _placeCartOrder(List<CartViewItem> cartItems) async {
-    if (!await AuthService.isLoggedIn()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please login to checkout your cart')),
-      );
-      return;
-    }
-
-    final insufficientItem = cartItems.firstWhere(
-      (item) => item.product.stock < item.quantity,
-      orElse: () => CartViewItem(product: cartItems.first.product, quantity: 0),
-    );
-
-    if (insufficientItem.quantity > 0 &&
-        insufficientItem.product.stock < insufficientItem.quantity) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Insufficient stock for ${insufficientItem.product.title}. Only ${insufficientItem.product.stock} items left.',
-          ),
-        ),
-      );
-      return;
-    }
-
-    final int amount = cartItems.fold<int>(
-      0,
-      (sum, item) => sum + (item.product.price * item.quantity * 100).round(),
-    );
-
-    if (_orderingItem) return;
-    setState(() => _orderingItem = true);
-
-    final paymentResult = await Navigator.of(context).push<dynamic>(
-      MaterialPageRoute(builder: (context) => Payment(amount: amount)),
-    );
-
-    if (paymentResult == null || paymentResult is! Map || paymentResult['success'] != true) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Payment was not completed')),
-      );
-      if (mounted) setState(() => _orderingItem = false);
-      return;
-    }
-
-    final paymentIntentId = paymentResult['paymentIntentId'] as String?;
-
-    try {
-      await ref.read(ordersProvider.notifier).placeCartOrder(paymentIntentId: paymentIntentId);
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cart checkout successful!')),
-      );
-      await ref.read(cartProvider.notifier).fetchCart();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to checkout cart: $e')));
-    } finally {
-      if (mounted) setState(() => _orderingItem = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final products = ref.watch(productProvider);
     final cart = ref.watch(cartProvider);
+    final isOrdering = ref.watch(orderFlowProvider);
 
     final cartItems = products
         .where((product) => cart.any((item) => item.prodId == product.id))
@@ -137,7 +68,7 @@ class _CartWidgetState extends ConsumerState<CartWidget> {
 
     final cartTotal = cartItems.fold<double>(
       0.0,
-      (sum, item) => sum + (item.product.price * item.quantity),
+      (sum, item) => sum + (item.product.discountedPrice * item.quantity),
     );
 
     return Scaffold(
@@ -178,12 +109,18 @@ class _CartWidgetState extends ConsumerState<CartWidget> {
                               ),
                               const SizedBox(height: 12),
                               ElevatedButton(
-                                onPressed: cartItems.isEmpty || _orderingItem
+                                onPressed: cartItems.isEmpty || isOrdering
                                     ? null
-                                    : () => _placeCartOrder(cartItems),
+                                    : () => ref
+                                          .read(orderFlowProvider.notifier)
+                                          .checkoutCart(context),
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: Theme.of(context).colorScheme.primary,
-                                  foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                                  backgroundColor: Theme.of(
+                                    context,
+                                  ).colorScheme.primary,
+                                  foregroundColor: Theme.of(
+                                    context,
+                                  ).colorScheme.onPrimary,
                                   padding: const EdgeInsets.symmetric(
                                     vertical: 16,
                                   ),
@@ -228,10 +165,10 @@ class _CartWidgetState extends ConsumerState<CartWidget> {
                                       ),
                                     ),
                                     const SizedBox(height: 4),
-                                    Text('Current price: ₹${product.price}'),
+                                    ProductOfferPrice(product: product, compact: true),
                                     Text('Quantity: $quantity'),
                                     Text(
-                                      'Line total: ₹${(product.price * quantity).toStringAsFixed(2)}',
+                                      'Line total: ₹${(product.discountedPrice * quantity).toStringAsFixed(2)}',
                                     ),
                                   ],
                                 ),
@@ -242,8 +179,12 @@ class _CartWidgetState extends ConsumerState<CartWidget> {
                                     onPressed: () =>
                                         _removeFromCart(product.id),
                                     style: ElevatedButton.styleFrom(
-                                      backgroundColor: Theme.of(context).colorScheme.error,
-                                      foregroundColor: Theme.of(context).colorScheme.onError,
+                                      backgroundColor: Theme.of(
+                                        context,
+                                      ).colorScheme.error,
+                                      foregroundColor: Theme.of(
+                                        context,
+                                      ).colorScheme.onError,
                                     ),
                                     child: const Text('Remove'),
                                   ),

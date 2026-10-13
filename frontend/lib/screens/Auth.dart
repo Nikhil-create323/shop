@@ -1,14 +1,12 @@
-import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:dummy_apps/screens/Shop.dart';
-import 'package:dummy_apps/main.dart';
-
 import 'package:firebase_auth/firebase_auth.dart';
-
-import 'package:dummy_apps/providers/otp.dart';
+import 'package:dummy_apps/screens/Shop.dart';
+import 'package:dummy_apps/screens/admin/home.dart';
+import 'package:dummy_apps/main.dart';
 
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:dummy_apps/widgets/drawer.dart';
@@ -16,8 +14,7 @@ import 'package:dummy_apps/screens/forgot-password.dart';
 import 'package:dummy_apps/main.dart' show baseUrl;
 
 import 'package:dummy_apps/utils/auth-service.dart';
-
-final FirebaseAuth auth = FirebaseAuth.instance;
+import 'package:jwt_decoder/jwt_decoder.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -40,17 +37,7 @@ class _AuthScreenState extends State<AuthScreen>
   bool _isSignUp = false;
   bool _emailPasswordVisible = false;
   bool _isLoadingEmail = false;
-
-  // Phone form controllers & state
-  final _phoneFormKey = GlobalKey<FormState>();
-  final _phoneController = TextEditingController();
-  final _otpController = TextEditingController();
-  final _phoneNameController =
-      TextEditingController(); // For registration if phone is new
-  bool _otpSent = false;
-  bool _isLoadingPhone = false;
-  int _resendTimerSeconds = 0;
-  Timer? _timer;
+  String _emailLoginRole = 'user';
 
   // Google state
   bool _isLoadingGoogle = false;
@@ -58,7 +45,7 @@ class _AuthScreenState extends State<AuthScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 2, vsync: this);
   }
 
   @override
@@ -67,27 +54,7 @@ class _AuthScreenState extends State<AuthScreen>
     _emailNameController.dispose();
     _emailController.dispose();
     _emailPasswordController.dispose();
-    _phoneController.dispose();
-    _otpController.dispose();
-    _phoneNameController.dispose();
-    _timer?.cancel();
     super.dispose();
-  }
-
-  void _startResendTimer() {
-    setState(() {
-      _resendTimerSeconds = 30;
-    });
-    _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_resendTimerSeconds == 0) {
-        timer.cancel();
-      } else {
-        setState(() {
-          _resendTimerSeconds--;
-        });
-      }
-    });
   }
 
   void _showSnackBar(String message, {bool isError = false}) {
@@ -115,7 +82,7 @@ class _AuthScreenState extends State<AuthScreen>
       final url = Uri.parse(_isSignUp ? '$_baseUrl/signup' : '$_baseUrl/login');
       final body = _isSignUp
           ? {"name": name, "email": email, "password": password}
-          : {"email": email, "password": password};
+          : {"email": email, "password": password, "role": _emailLoginRole};
 
       final response = await http.post(
         url,
@@ -141,10 +108,22 @@ class _AuthScreenState extends State<AuthScreen>
             print("User ID: ${user['id']}");
             print("User Name: ${user['name']}");
           }
+
+          final decoded = JwtDecoder.decode(token);
+          final resolvedRole =
+              (user?['role'] ?? decoded['role'] ?? _emailLoginRole)
+                  .toString()
+                  .toLowerCase();
+
           _showSnackBar(
             _isSignUp ? 'Account created successfully!' : 'Welcome back!',
           );
-          _navigateToShop();
+
+          if (resolvedRole == 'admin') {
+            _navigateToAdminHome();
+          } else {
+            _navigateToShop();
+          }
         } else {
           _showSnackBar(
             'Authentication succeeded but token is missing.',
@@ -165,203 +144,65 @@ class _AuthScreenState extends State<AuthScreen>
   }
 
   // Google Authentication Trigger
-  Future<void> _triggerGoogleAuth(
-    String dummyEmail,
-    String dummyName,
-    String googleId,
-    String dummyImage,
-  ) async {
+  Future<void> _triggerGoogleAuth() async {
     setState(() => _isLoadingGoogle = true);
 
     try {
-      final url = Uri.parse('$_baseUrl/api/google-auth');
-      final response = await http.post(
-        url,
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "googleId": googleId,
-          "email": dummyEmail,
-          "name": dummyName,
-          "profileImage": dummyImage,
-        }),
-      );
+      final provider = GoogleAuthProvider();
+      provider.setCustomParameters({'prompt': 'select_account'});
+      final googleUser = kIsWeb
+          ? await FirebaseAuth.instance.signInWithPopup(provider)
+          : await FirebaseAuth.instance.signInWithProvider(provider);
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200 && data['success'] == true) {
-        final token = data['token'];
-        final returnedName = data['user']?['name']?.toString() ?? dummyName;
-        if (token != null) {
-          await _storage.write(key: 'token', value: token);
-          if (returnedName.isNotEmpty) {
-            await AuthService.saveUserName(returnedName);
-          }
-          _showSnackBar('Logged in with Google: $returnedName');
-          _navigateToShop();
-        } else {
-          _showSnackBar(
-            'Google Auth succeeded but token is missing.',
-            isError: true,
-          );
-        }
-      } else {
-        _showSnackBar(
-          data['message'] ?? 'Google authentication failed.',
-          isError: true,
-        );
+      final firebaseUser = googleUser.user;
+      if (firebaseUser == null) {
+        throw StateError('Firebase sign-in did not return a user.');
       }
+
+      final token = await firebaseUser.getIdToken(true);
+      if (token == null || token.isEmpty) {
+        throw StateError('Firebase did not provide an ID token.');
+      }
+
+      await _storage.write(key: 'token', value: token);
+      final returnedName = firebaseUser.displayName ?? 'Google User';
+      if (returnedName.isNotEmpty) {
+        await AuthService.saveUserName(returnedName);
+      }
+
+      _showSnackBar('Logged in with Google: $returnedName');
+      _navigateToShop();
+    } on FirebaseAuthException catch (e) {
+      final isCancelled =
+          e.code == 'popup-closed-by-user' ||
+          e.code == 'web-context-canceled' ||
+          e.code == 'sign_in_canceled';
+      _showSnackBar(
+        isCancelled
+            ? 'Google sign-in was canceled.'
+            : e.message ?? 'Google sign-in failed.',
+        isError: !isCancelled,
+      );
     } catch (e) {
-      _showSnackBar('Error connecting to backend: $e', isError: true);
+      _showSnackBar('Google authentication failed: $e', isError: true);
     } finally {
-      setState(() => _isLoadingGoogle = false);
+      if (mounted) {
+        setState(() => _isLoadingGoogle = false);
+      }
     }
-  }
-
-  void _showGoogleAccountPicker() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (BuildContext context) {
-        return FractionallySizedBox(
-          heightFactor: 0.75, // max 75% of screen height
-          child: Container(
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHigh,
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(24),
-                topRight: Radius.circular(24),
-              ),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Center(
-                  child: Container(
-                    width: 50,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.outline,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                Text(
-                  'Choose an account',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    fontFamily: 'Outfit',
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-
-                const SizedBox(height: 8),
-
-                Text(
-                  'to continue to DummyShop',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    fontSize: 14,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-
-                const SizedBox(height: 24),
-
-                // Scrollable content
-                Expanded(
-                  child: ListView(
-                    children: [
-                      _buildGoogleAccountItem(
-                        email: 'nikhildager7@gmail.com',
-                        name: 'Nikhil Dagar',
-                        googleId: '1077778974450-nikhildager',
-                        avatarUrl:
-                            'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80',
-                      ),
-                      Divider(
-                        color: Theme.of(context).colorScheme.outlineVariant,
-                        height: 1,
-                      ),
-
-                      _buildGoogleAccountItem(
-                        email: 'testuser@gmail.com',
-                        name: 'Test User Account',
-                        googleId: '1077778974450-testuser',
-                        avatarUrl:
-                            'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=120&q=80',
-                      ),
-                      Divider(
-                        color: Theme.of(context).colorScheme.outlineVariant,
-                        height: 1,
-                      ),
-
-                      _buildGoogleAccountItem(
-                        email: 'deepmindguest@gmail.com',
-                        name: 'Guest Reviewer',
-                        googleId: '1077778974450-guest',
-                        avatarUrl:
-                            'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?auto=format&fit=crop&w=120&q=80',
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildGoogleAccountItem({
-    required String email,
-    required String name,
-    required String googleId,
-    required String avatarUrl,
-  }) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(vertical: 8),
-      leading: CircleAvatar(
-        backgroundImage: NetworkImage(avatarUrl),
-        radius: 20,
-      ),
-      title: Text(
-        name,
-        style: TextStyle(
-          color: Theme.of(context).colorScheme.onSurface,
-          fontWeight: FontWeight.w600,
-          fontSize: 16,
-        ),
-      ),
-      subtitle: Text(
-        email,
-        style: TextStyle(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-          fontSize: 13,
-        ),
-      ),
-      trailing: Icon(
-        Icons.arrow_forward_ios,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-        size: 16,
-      ),
-      onTap: () {
-        Navigator.pop(context); // Close bottom sheet
-        _triggerGoogleAuth(email, name, googleId, avatarUrl);
-      },
-    );
   }
 
   void _navigateToShop() {
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => Shop()),
+    );
+  }
+
+  void _navigateToAdminHome() {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
     );
   }
 
@@ -402,7 +243,6 @@ class _AuthScreenState extends State<AuthScreen>
           ),
           tabs: const [
             Tab(text: 'Email', icon: Icon(Icons.email_outlined)),
-            Tab(text: 'Phone', icon: Icon(Icons.phone_outlined)),
             Tab(text: 'Google', icon: Icon(Icons.g_mobiledata, size: 36)),
           ],
         ),
@@ -413,9 +253,6 @@ class _AuthScreenState extends State<AuthScreen>
           children: [
             // EMAIL TAB
             _buildEmailView(themeColor),
-
-            // PHONE TAB
-            _buildPhoneView(themeColor),
 
             // GOOGLE TAB
             _buildGoogleView(themeColor),
@@ -530,7 +367,51 @@ class _AuthScreenState extends State<AuthScreen>
                     return null;
                   },
                 ),
-                const SizedBox(height: 28),
+                const SizedBox(height: 24),
+
+                if (!_isSignUp) ...[
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Login as',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ToggleButtons(
+                    isSelected: [
+                      _emailLoginRole == 'user',
+                      _emailLoginRole == 'admin',
+                    ],
+                    onPressed: (index) {
+                      setState(() {
+                        _emailLoginRole = index == 0 ? 'user' : 'admin';
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(12),
+                    selectedColor: Theme.of(context).colorScheme.onPrimary,
+                    fillColor: Theme.of(context).colorScheme.primary,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    constraints: const BoxConstraints(
+                      minHeight: 42,
+                      minWidth: 120,
+                    ),
+                    children: const [
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        child: Text('User'),
+                      ),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        child: Text('Admin'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                ],
 
                 // Submit Button
                 ElevatedButton(
@@ -601,244 +482,6 @@ class _AuthScreenState extends State<AuthScreen>
     );
   }
 
-  Widget _buildPhoneView(Color themeColor) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24.0),
-      child: Card(
-        color: Theme.of(context).colorScheme.surfaceContainerHigh,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        elevation: 8,
-        child: Padding(
-          padding: const EdgeInsets.all(20.0),
-          child: Form(
-            key: _phoneFormKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'OTP Authentication',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _otpSent
-                      ? 'Enter the verification code sent to your phone'
-                      : 'Sign up or login with your mobile phone number',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    fontSize: 13,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 24),
-
-                // Phone field
-                TextFormField(
-                  controller: _phoneController,
-                  enabled: !_otpSent,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                  keyboardType: TextInputType.phone,
-                  decoration: _buildInputDecoration(
-                    label: 'Phone Number',
-                    icon: Icons.phone,
-                    hint: 'e.g. 9876543210',
-                  ),
-                  validator: (val) {
-                    if (val == null || val.trim().isEmpty) {
-                      return 'Please enter your phone number';
-                    }
-                    if (val.trim().length < 10) {
-                      return 'Please enter a valid 10-digit number';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // OTP View Fields (Shown once OTP is requested)
-                if (_otpSent) ...[
-                  // Name field for phone registration
-                  TextFormField(
-                    controller: _phoneNameController,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onSurface,
-                    ),
-                    decoration: _buildInputDecoration(
-                      label: 'Full Name (For New Profiles)',
-                      icon: Icons.person_outline,
-                      hint: 'Optional name',
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // 6-digit code field
-                  TextFormField(
-                    controller: _otpController,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onSurface,
-                    ),
-                    keyboardType: TextInputType.number,
-                    maxLength: 6,
-                    decoration: _buildInputDecoration(
-                      label: '6-digit OTP Code',
-                      icon: Icons.domain_verification_outlined,
-                      hint: 'Enter 6 digit code',
-                    ),
-                    validator: (val) {
-                      if (val == null || val.trim().isEmpty) {
-                        return 'Please enter the OTP';
-                      }
-                      if (val.trim().length < 6) {
-                        return 'Please enter a valid 6-digit OTP';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                ],
-
-                // Action Button
-                ElevatedButton(
-                  onPressed: _isLoadingPhone
-                      ? null
-                      : () async {
-                          if (!_phoneFormKey.currentState!.validate()) return;
-
-                          setState(() {
-                            _isLoadingPhone = true;
-                          });
-
-                          try {
-                            if (_otpSent) {
-                              final token = await verifyOTP(
-                                _otpController.text.trim(),
-                              );
-                              if (token != null) {
-                                await _storage.write(
-                                  key: 'token',
-                                  value: token,
-                                );
-                                final phoneName = _phoneNameController.text
-                                    .trim();
-                                if (phoneName.isNotEmpty) {
-                                  await AuthService.saveUserName(phoneName);
-                                } else {
-                                  await AuthService.saveUserName(
-                                    '+91${_phoneController.text.trim()}',
-                                  );
-                                }
-                              }
-
-                              _showSnackBar("Login Successful");
-                              _navigateToShop();
-                            } else {
-                              await sendOTP(
-                                "+91${_phoneController.text.trim()}",
-                              );
-
-                              setState(() {
-                                _otpSent = true;
-                              });
-
-                              _startResendTimer();
-
-                              _showSnackBar("OTP Sent");
-                            }
-                          } catch (e) {
-                            _showSnackBar(e.toString(), isError: true);
-                          } finally {
-                            setState(() {
-                              _isLoadingPhone = false;
-                            });
-                          }
-                        },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: themeColor,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  child: _isLoadingPhone
-                      ? SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(
-                            color: Theme.of(context).colorScheme.onPrimary,
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : Text(
-                          _otpSent ? 'Verify & Continue' : 'Get OTP Code',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context).colorScheme.onPrimary,
-                          ),
-                        ),
-                ),
-
-                if (_otpSent) ...[
-                  const SizedBox(height: 12),
-                  // Resend Action
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      TextButton(
-                        onPressed: () {
-                          setState(() {
-                            _otpSent = false;
-                            _otpController.clear();
-                          });
-                        },
-                        child: Text(
-                          'Change Number',
-                          style: TextStyle(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: _resendTimerSeconds > 0
-                            ? null
-                            : () async {
-                                await sendOTP(
-                                  "+91${_phoneController.text.trim()}",
-                                );
-                                _startResendTimer();
-                              },
-                        child: Text(
-                          _resendTimerSeconds > 0
-                              ? 'Resend in ${_resendTimerSeconds}s'
-                              : 'Resend OTP',
-                          style: TextStyle(
-                            color: _resendTimerSeconds > 0
-                                ? Theme.of(context).colorScheme.onSurfaceVariant
-                                : themeColor,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildGoogleView(Color themeColor) {
     return Padding(
       padding: const EdgeInsets.all(32.0),
@@ -883,7 +526,7 @@ class _AuthScreenState extends State<AuthScreen>
 
             // Premium Google Button
             OutlinedButton(
-              onPressed: _isLoadingGoogle ? null : _showGoogleAccountPicker,
+              onPressed: _isLoadingGoogle ? null : _triggerGoogleAuth,
               style: OutlinedButton.styleFrom(
                 side: BorderSide(
                   color: Theme.of(context).colorScheme.outline,
@@ -986,87 +629,3 @@ class _AuthScreenState extends State<AuthScreen>
     );
   }
 }
-
-
-
-
- // Request Phone OTP
-  // Future<void> _requestOtp() async {
-  //   if (!_phoneFormKey.currentState!.validate()) return;
-  //   setState(() => _isLoadingPhone = true);
-  //   final phone = _phoneController.text.trim();
-  //   try {
-  //     final url = Uri.parse('$_baseUrl/api/send-otp');
-  //     final response = await http.post(
-  //       url,
-  //       headers: {"Content-Type": "application/json"},
-  //       body: jsonEncode({"phone": phone}),
-  //     );
-  //     final data = jsonDecode(response.body);
-  //     if (response.statusCode == 200 && data['success'] == true) {
-  //       setState(() {
-  //         _otpSent = true;
-  //       });
-  //       _startResendTimer();
-  //       // Dynamic notification if Twilio Dev mode is active (returns OTP in response)
-  //       if (data['otp'] != null) {
-  //         _showSnackBar(
-  //           'OTP Sent (Dev Mode)! Check console or enter ${data['otp']}',
-  //         );
-  //         print('[OTP Dev Mode] Code for $phone: ${data['otp']}');
-  //       } else {
-  //         _showSnackBar('OTP code sent successfully!');
-  //       }
-  //     } else {
-  //       _showSnackBar(
-  //         data['message'] ?? 'Failed to send OTP code.',
-  //         isError: true,
-  //       );
-  //     }
-  //   } catch (e) {
-  //     _showSnackBar('Error: $e', isError: true);
-  //   } finally {
-  //     setState(() => _isLoadingPhone = false);
-  //   }
-  // }
-  // Verify Phone OTP
-  // Future<void> _verifyOtpAndLogin() async {
-  
-  //   final phone = _phoneController.text.trim();
-  //   final otp = _otpController.text.trim();
-  //   final name = _phoneNameController.text.trim();
-  //   if (otp.length < 6) {
-  //     _showSnackBar('Please enter a valid 6-digit OTP code.', isError: true);
-  //     return;
-  //   }
-  //   setState(() => _isLoadingPhone = true);
-  //   try {
-  //     final url = Uri.parse('$_baseUrl/api/verify-otp');
-  //     final response = await http.post(
-  //       url,
-  //       headers: {"Content-Type": "application/json"},
-  //       body: jsonEncode({
-  //         "phone": phone,
-  //         "otp": otp,
-  //         "name": name.isEmpty ? null : name,
-  //       }),
-  //     );
-  //     final data = jsonDecode(response.body);
-  //     if (response.statusCode == 200 && data['success'] == true) {
-  //       final token = data['token'];
-  //       if (token != null) {
-  //         await _storage.write(key: 'token', value: token);
-  //         _showSnackBar('OTP verified! Successfully logged in.');
-  //         _navigateToShop();
-  //       } else {
-  //         _showSnackBar('OTP verified but token is missing.', isError: true);
-  //       }
-  //     } else {
-  //       _showSnackBar(data['message'] ?? 'Incorrect OTP code.', isError: true);
-  //     }
-  //   } catch (e) {
-  //     _showSnackBar('Error: $e', isError: true);
-  //   } finally {
-  //     setState(() => _isLoadingPhone = false);
-  //   }
-  // }

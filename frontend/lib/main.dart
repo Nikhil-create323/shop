@@ -3,6 +3,7 @@ import 'package:dummy_apps/providers/cart_provider.dart';
 import 'package:dummy_apps/providers/products_provider.dart';
 import 'package:dummy_apps/screens/Shop.dart';
 import 'package:dummy_apps/screens/Auth.dart';
+import 'package:dummy_apps/screens/admin/home.dart';
 import 'package:dummy_apps/widgets/drawer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,8 +21,12 @@ import 'dart:io';
 
 import 'package:flutter_stripe/flutter_stripe.dart';
 
+import 'screens/firebaseAuth.dart';
+
 const storage = FlutterSecureStorage();
+final appScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 String baseUrl = '';
+const configuredApiBaseUrl = String.fromEnvironment('API_BASE_URL');
 
 //to bypass SSL certificate verification for development purposes
 class MyHttpOverrides extends HttpOverrides {
@@ -34,6 +39,7 @@ class MyHttpOverrides extends HttpOverrides {
 }
 
 Future<String> getDynamicBaseUrl() async {
+  if (configuredApiBaseUrl.isNotEmpty) return configuredApiBaseUrl;
   if (kIsWeb) return 'http://localhost:3000';
 
   final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
@@ -81,18 +87,6 @@ var kLightTheme = ThemeData(
   ),
 );
 
-Future<void> fetchTest() async {
-  final url = Uri.parse("$baseUrl/api/test");
-
-  final response = await http.get(url);
-  if (response.statusCode == 200) {
-    final data = jsonDecode(response.body);
-    print("GET Response: ${data['message']}");
-  } else {
-    print("GET Error: ${response.statusCode}");
-  }
-}
-
 Future<String> loginStatus() async {
   final token = await storage.read(key: 'token');
 
@@ -102,8 +96,15 @@ Future<String> loginStatus() async {
 
   bool isExpired = JwtDecoder.isExpired(token);
 
-  if (isExpired) return 'auth';
+  if (isExpired) {
+    await storage.delete(key: 'token');
+    return 'auth';
+  }
 
+  final decoded = JwtDecoder.decode(token);
+  final role = decoded['role']?.toString().toLowerCase();
+
+  if (role == 'admin') return 'admin';
   return 'home';
 }
 
@@ -141,15 +142,29 @@ class _MyAppState extends ConsumerState<MyApp> {
   @override
   void initState() {
     super.initState();
-    fetchTest();
-
-    ref.read(productProvider.notifier).fetchProducts();
+    ref.read(productProvider.notifier).fetchProducts(syncInventory: false);
     ref.read(cartProvider.notifier).fetchCart();
+
+    final checkoutStatus = Uri.base.queryParameters['checkout'];
+    if (checkoutStatus == 'success' || checkoutStatus == 'cancelled') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        appScaffoldMessengerKey.currentState?.showSnackBar(
+          SnackBar(
+            content: Text(
+              checkoutStatus == 'success'
+                  ? 'Payment successful and order confirmed.'
+                  : 'Payment was cancelled. Your cart is unchanged.',
+            ),
+          ),
+        );
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      scaffoldMessengerKey: appScaffoldMessengerKey,
       theme: kLightTheme,
       darkTheme: kDarkTheme,
       themeMode: ThemeMode.light,
@@ -180,9 +195,11 @@ class _MyAppState extends ConsumerState<MyApp> {
                   return const Center(child: CircularProgressIndicator());
                 }
 
+                if (snapshot.data == 'admin') return const HomeScreen();
                 if (snapshot.data == 'home') return Shop();
 
                 return const AuthScreen();
+                // return const FirebaseAuthScreen();
               },
             ),
           );

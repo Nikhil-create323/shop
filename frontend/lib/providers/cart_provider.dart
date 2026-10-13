@@ -35,14 +35,15 @@ class CartNotifier extends Notifier<List<CartItem>> {
   }
 
   Future<void> fetchCart() async {
-    await _ensureLoggedIn();
+    if (!await AuthService.isLoggedIn()) return;
+    final role = await AuthService.getRole();
+    if (role?.toLowerCase() == 'admin') return;
+
     final url = Uri.parse('$baseUrl/fetchCart');
     final response = await http.get(url, headers: await _headers());
 
     if (response.statusCode == 200) {
       _applyCartData(jsonDecode(response.body));
-    } else {
-      throw Exception('Server returned status: ${response.statusCode}');
     }
   }
 

@@ -6,8 +6,6 @@ const bcrypt = require('bcrypt');
 const twilio = require('twilio');
 
 const User = require('../models/user');
-const Order = require('../models/order');
-const Cart = require('../models/cart');
 const ResetPassword = require('../models/password-reset');
 
 const {sendMail} = require('./gmail');
@@ -194,7 +192,7 @@ const logIn = async (req, res, next)  =>  {
       userId: curUser._id,
       name: curUser.name,
       role: curUser.role,
-    }, SECRET_KEY, { expiresIn: "14d" });
+    }, SECRET_KEY, { expiresIn: "21d" });
 
     res.json({
       message: `Hello ${curUser.name}`,
@@ -301,7 +299,7 @@ const googleAuth = async (req, res) => {
     const token = jwt.sign(
       { userId: user._id },
       SECRET_KEY,
-      { expiresIn: '24h' }
+      { expiresIn: '21d' }
     );
 
     return res.json({
@@ -322,187 +320,6 @@ const googleAuth = async (req, res) => {
       success: false,
       message: 'Google authentication failed',
       error: error.message
-    });
-  }
-};
-
-const fetchOrders = async (req, res, next) => {
-  try {
-    const orders = await Order.find().sort({ orderedAt: -1 });
-
-    return res.status(200).json({
-      orders,
-      message: orders.length === 0 ? 'Orders are empty' : 'Orders fetched successfully',
-    });
-  } catch (error) {
-    console.error('Error fetching orders:', error);
-    return res.status(500).json({
-      message: 'Failed to fetch orders',
-      error: error.message,
-    });
-  }
-};
-
-const placeOrder = async (req, res, next) => {
-  try {
-    const { productId, quantity } = req.body;
-    const orderQty = Number(quantity);
-
-    if (!productId || !Number.isFinite(orderQty) || orderQty < 1) {
-      return res.status(400).json({
-        message: 'productId and quantity (positive number) are required',
-      });
-    }
-
-    const product = await findProductById(productId);
-    if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
-    }
-
-    if (product.stock < orderQty) {
-      return res.status(400).json({
-        message: `Insufficient stock for ${product.title}. Only ${product.stock} items left.`,
-      });
-    }
-
-    product.stock -= orderQty;
-    await product.save();
-
-    const newOrder = await Order.create({
-      productId: product._id.toString(),
-      title: product.title,
-      imageUrl: product.imageUrl || '',
-      quantity: orderQty,
-      price: product.price,
-      orderedAt: new Date(),
-    });
-
-    const productIdStr = String(productId);
-    const cartItem = await Cart.findOne({ prodId: productIdStr });
-    if (cartItem) {
-      if (cartItem.quantity <= orderQty) {
-        await Cart.deleteOne({ prodId: productIdStr });
-      } else {
-        cartItem.quantity -= orderQty;
-        await cartItem.save();
-      }
-    }
-
-    const cart = await Cart.find();
-
-    return res.status(201).json({
-      message: 'Order placed successfully',
-      order: newOrder,
-      cart,
-    });
-  } catch (error) {
-    console.error('Error placing order:', error);
-    return res.status(500).json({
-      message: 'Failed to place order',
-      error: error.message,
-    });
-  }
-};
-
-const placeCartOrder = async (req, res, next) => {
-  try {
-    const cartItems = await Cart.find();
-
-    if (cartItems.length === 0) {
-      return res.status(400).json({ message: 'Cart is empty' });
-    }
-
-    const resolved = [];
-    for (const item of cartItems) {
-      const product = await findProductById(item.prodId);
-      if (!product) {
-        return res.status(404).json({
-          message: `Product not found for cart item: ${item.prodId}`,
-        });
-      }
-      if (product.stock < item.quantity) {
-        return res.status(400).json({
-          message: `Insufficient stock for ${product.title}. Only ${product.stock} items left.`,
-        });
-      }
-      resolved.push({ cartItem: item, product });
-    }
-
-    const createdOrders = [];
-    const orderedAt = new Date();
-
-    for (const { cartItem, product } of resolved) {
-      product.stock -= cartItem.quantity;
-      await product.save();
-
-      const order = await Order.create({
-        productId: product._id.toString(),
-        title: product.title,
-        imageUrl: product.imageUrl || '',
-        quantity: cartItem.quantity,
-        price: product.price,
-        orderedAt,
-      });
-
-      createdOrders.push(order);
-    }
-
-    await Cart.deleteMany({});
-
-    return res.status(201).json({
-      message: 'Cart ordered successfully',
-      orders: createdOrders,
-      cart: [],
-    });
-  } catch (error) {
-    console.error('Error placing cart order:', error);
-    return res.status(500).json({
-      message: 'Failed to place cart order',
-      error: error.message,
-    });
-  }
-};
-
-const searchFilter = async (req, res, next) => {
-  try {
-    const prompt =
-      typeof req.body?.prompt === 'string'
-        ? req.body.prompt
-        : typeof req.body?.message === 'string'
-          ? req.body.message
-          : '';
-
-    if (!prompt.trim()) {
-      return res.status(400).json({ message: 'prompt (non-empty string) required' });
-    }
-
-    if (!GEMINI_API_KEY) {
-      return res.status(500).json({ message: 'Gemini API key not configured' });
-    }
-
-    const trimmedPrompt = prompt.trim();
-    let filter;
-
-    try {
-      filter = await getFilterFromGemini(trimmedPrompt);
-    } catch (geminiError) {
-      console.warn('Gemini filter fallback:', geminiError.message);
-      filter = fallbackTitleFilter(trimmedPrompt);
-    }
-
-    const products = await Product.find(filter).lean();
-
-    res.status(200).json({
-      prompt: trimmedPrompt,
-      filter,
-      products,
-      count: products.length,
-    });
-  } catch (error) {
-    console.error('searchFilter error:', error);
-    res.status(500).json({
-      message: 'Search failed',
-      error: error.message,
     });
   }
 };
@@ -595,6 +412,7 @@ module.exports = {
   signUp,
   logIn,
   googleAuth,
+  verifyGoogleOAuthToken,
   logOut,
   resetPassword,
   forgotPassword,

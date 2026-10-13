@@ -1,8 +1,7 @@
 import 'package:dummy_apps/model/product.dart';
 
-/// Single source of truth for the product catalog.
-/// On app start, [ProductNotifier.syncInventoryToServer] POSTs this list to
-/// `/seedProducts`; MongoDB stores `sku` + fields and assigns `_id` for cart/orders.
+/// Local fallback catalog. The server catalog is authoritative for products
+/// and stock; syncing this list must be an explicit development/bootstrap action.
 final List<Product> inventory = [
   Product(
     id: 'inv-book-1',

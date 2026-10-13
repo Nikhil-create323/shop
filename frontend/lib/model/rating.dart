@@ -26,15 +26,21 @@ class Rating {
   factory Rating.fromJson(Map<String, dynamic> json) {
     return Rating(
       id: (json['_id'] ?? json['id'])?.toString(),
-      rating: (json['rating'] as num).toDouble(),
-      productId: json['productId'] as String,
-      user: json['user'] as String,
-      description: json['description'] as String,
+      rating: (json['rating'] as num?)?.toDouble() ?? 0,
+      productId: json['productId']?.toString() ?? '',
+      user: json['user']?.toString() ?? '',
+      description: json['description']?.toString() ?? '',
       likeCount: (json['likeCount'] as num?)?.toInt() ?? 0,
       dislikeCount: (json['dislikeCount'] as num?)?.toInt() ?? 0,
-      likedBy: List<String>.from(json['likedBy'] ?? []),
-      dislikedBy: List<String>.from(json['dislikedBy'] ?? []),
-      timestamp: DateTime.parse(json['timestamp']),
+      likedBy: (json['likedBy'] as List<dynamic>? ?? [])
+          .whereType<String>()
+          .toList(),
+      dislikedBy: (json['dislikedBy'] as List<dynamic>? ?? [])
+          .whereType<String>()
+          .toList(),
+      timestamp:
+          DateTime.tryParse(json['timestamp']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0),
     );
   }
 

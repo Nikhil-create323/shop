@@ -1,8 +1,10 @@
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const Order = require('../models/order');
 const Cart = require('../models/cart');
 const Product = require('../models/product');
 const { findProductById } = require('./product');
+
 const stripe = require("stripe")(
   process.env.STRIPE_API_KEY
 );
@@ -35,7 +37,12 @@ const getAuthenticatedRole = (req) => {
   }
 };
 
-const getVerifiedPaymentIntent = async (paymentIntentId, expectedAmount, userId) => {
+const getVerifiedPaymentIntent = async (
+  paymentIntentId,
+  expectedAmount,
+  userId,
+  expectedCartSignature,
+) => {
   if (!paymentIntentId) {
     return { error: 'paymentIntentId is required', status: 400 };
   }
@@ -49,6 +56,13 @@ const getVerifiedPaymentIntent = async (paymentIntentId, expectedAmount, userId)
     return { error: 'Payment does not belong to this account', status: 403 };
   }
 
+  if (
+    expectedCartSignature &&
+    paymentIntent.metadata?.cartSignature !== expectedCartSignature
+  ) {
+    return { error: 'Cart contents changed after payment started', status: 409 };
+  }
+
   if (paymentIntent.currency !== 'inr' ||
       paymentIntent.amount_received !== expectedAmount) {
     return { error: 'Paid amount does not match the current order total', status: 400 };
@@ -60,6 +74,7 @@ const getVerifiedPaymentIntent = async (paymentIntentId, expectedAmount, userId)
 const refundUnfulfilledPaymentIntent = async (paymentIntentId, userId, idempotencyKey) => {
   const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
   if (
+    !paymentIntent ||
     paymentIntent.status !== 'succeeded' ||
     paymentIntent.metadata?.userId !== String(userId)
   ) {
@@ -91,25 +106,100 @@ const restoreStock = async (productId, quantity) => {
 
 const orderError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
 
+const getFrontendReturnUrl = (checkoutStatus, fallbackUrl = null) => {
+  const configuredUrl = process.env.FRONTEND_URL || fallbackUrl;
+  if (!configuredUrl) return null;
+
+  const frontendUrl = new URL(configuredUrl);
+  if (
+    !['http:', 'https:'].includes(frontendUrl.protocol) ||
+    frontendUrl.username ||
+    frontendUrl.password
+  ) {
+    throw new Error('FRONTEND_URL must be an absolute HTTP(S) URL without credentials');
+  }
+  frontendUrl.searchParams.set('checkout', checkoutStatus);
+  return frontendUrl.toString();
+};
+
+const getCartSignature = (resolvedItems) => {
+  const contents = resolvedItems
+    .map(({ product, quantity }) =>
+      `${product._id}:${quantity}:${getDiscountedUnitAmount(product)}`,
+    )
+    .sort()
+    .join('|');
+  return crypto.createHash('sha256').update(contents).digest('hex');
+};
+
+const getDiscountedUnitAmount = (product) => {
+  const discountPercentage = Number(product.discountPercentage) || 0;
+  return Math.round(product.price * (1 - discountPercentage / 100) * 100);
+};
 
 const createPaymentIntent = async (req, res, next) => {
   try {
-    const { amount } = req.body;
+    const { amount, cartCheckout, productId, quantity: requestedQuantity } = req.body;
     const userId = getAuthenticatedUserId(req);
 
     if (!userId) {
       return res.status(401).json({ message: 'Authentication required' });
     }
-    if (!Number.isFinite(amount) || amount <= 0) {
+    if (!Number.isInteger(amount) || amount <= 0) {
       return res.status(400).json({
         error: 'A valid amount is required to create a payment intent.',
       });
     }
 
+    const metadata = { userId: String(userId) };
+    if (cartCheckout === true) {
+      const cartItems = await Cart.find({ userID: userId });
+      if (cartItems.length === 0) {
+        return res.status(400).json({ message: 'Cart is empty' });
+      }
+
+      const resolved = [];
+      for (const item of cartItems) {
+        const product = await findProductById(item.prodId);
+        const quantity = Number(item.quantity);
+        if (!product) {
+          return res.status(404).json({ message: `Product not found for cart item: ${item.prodId}` });
+        }
+        if (!Number.isInteger(quantity) || quantity < 1 || product.stock < quantity) {
+          return res.status(409).json({ message: `Insufficient or invalid stock for ${product.title}` });
+        }
+        resolved.push({ product, quantity });
+      }
+
+      const expectedAmount = resolved.reduce(
+        (total, { product, quantity }) => total + getDiscountedUnitAmount(product) * quantity,
+        0,
+      );
+      if (amount !== expectedAmount) {
+        return res.status(400).json({ message: 'Cart total changed; refresh the cart and try again' });
+      }
+      metadata.cartSignature = getCartSignature(resolved);
+    } else {
+      const quantity = Number(requestedQuantity);
+      if (!productId || !Number.isInteger(quantity) || quantity < 1) {
+        return res.status(400).json({ message: 'productId and a positive integer quantity are required' });
+      }
+      const product = await findProductById(productId);
+      if (!product) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+      if (product.stock < quantity) {
+        return res.status(409).json({ message: `Insufficient stock for ${product.title}` });
+      }
+      if (amount !== getDiscountedUnitAmount(product) * quantity) {
+        return res.status(400).json({ message: 'Order total changed; refresh and try again' });
+      }
+    }
+
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amount,
       currency: 'inr',
-      metadata: { userId: String(userId) },
+      metadata,
     });
 
     res.status(200).json({
@@ -124,60 +214,117 @@ const createPaymentIntent = async (req, res, next) => {
 
 const createCheckoutSession = async (req, res, next) => {
   try {
-    const { amount } = req.body;
+    const { amount, cartCheckout, productId, quantity: requestedQuantity } = req.body;
     const userId = getAuthenticatedUserId(req);
 
     if (!userId) {
       return res.status(401).json({ message: 'Authentication required' });
     }
-    if (!Number.isFinite(amount) || amount <= 0) {
+    if (!Number.isInteger(amount) || amount <= 0) {
       return res.status(400).json({
         error: 'A valid amount is required to create a checkout session.',
       });
     }
 
-    const cartItems = await Cart.find({ userID: userId });
-    if (cartItems.length === 0) {
-      return res.status(400).json({ message: 'Cart is empty' });
-    }
-
     const lineItems = [];
     let expectedAmount = 0;
-    for (const item of cartItems) {
-      const product = await findProductById(item.prodId);
-      const quantity = Number(item.quantity);
+    let sessionMetadata;
+    if (cartCheckout === true) {
+      const cartItems = await Cart.find({ userID: userId });
+      if (cartItems.length === 0) {
+        return res.status(400).json({ message: 'Cart is empty' });
+      }
+
+      const resolved = [];
+      for (const item of cartItems) {
+        const product = await findProductById(item.prodId);
+        const quantity = Number(item.quantity);
+        if (!product) {
+          return res.status(404).json({ message: `Product not found for cart item: ${item.prodId}` });
+        }
+        if (!Number.isInteger(quantity) || quantity < 1 || product.stock < quantity) {
+          return res.status(409).json({ message: `Insufficient or invalid stock for ${product.title}` });
+        }
+        const unitAmount = getDiscountedUnitAmount(product);
+        expectedAmount += unitAmount * quantity;
+        resolved.push({ product, quantity });
+        lineItems.push({
+          price_data: {
+            currency: 'inr',
+            product_data: { name: product.title },
+            unit_amount: unitAmount,
+          },
+          quantity,
+        });
+      }
+
+      sessionMetadata = {
+        userId: String(userId),
+        checkoutType: 'cart',
+        cartSignature: getCartSignature(resolved),
+      };
+    } else {
+      const quantity = Number(requestedQuantity);
+      if (!productId || !Number.isInteger(quantity) || quantity < 1) {
+        return res.status(400).json({ message: 'productId and a positive integer quantity are required' });
+      }
+      const product = await findProductById(productId);
       if (!product) {
-        return res.status(404).json({ message: `Product not found for cart item: ${item.prodId}` });
+        return res.status(404).json({ message: 'Product not found' });
       }
-      if (!Number.isInteger(quantity) || quantity < 1 || product.stock < quantity) {
-        return res.status(409).json({ message: `Insufficient or invalid stock for ${product.title}` });
+      if (product.stock < quantity) {
+        return res.status(409).json({ message: `Insufficient stock for ${product.title}` });
       }
-      expectedAmount += Math.round(product.price * 100) * quantity;
+      const unitAmount = getDiscountedUnitAmount(product);
+      expectedAmount = unitAmount * quantity;
       lineItems.push({
         price_data: {
           currency: 'inr',
           product_data: { name: product.title },
-          unit_amount: Math.round(product.price * 100),
+          unit_amount: unitAmount,
         },
         quantity,
       });
+      sessionMetadata = {
+        userId: String(userId),
+        checkoutType: 'single',
+        productId: String(product._id),
+        quantity: String(quantity),
+      };
     }
 
     if (amount !== expectedAmount) {
-      return res.status(400).json({ message: 'Cart total changed; refresh the cart and try again' });
+      return res.status(400).json({ message: 'Order total changed; refresh and try again' });
     }
 
-    const apiBaseUrl = (
-      process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`
-    ).replace(/\/+$/, '');
+    const frontendUrl = process.env.FRONTEND_URL || req.get('origin') || null;
+    getFrontendReturnUrl('success', frontendUrl);
+    const frontendCancelUrl = getFrontendReturnUrl('cancelled', frontendUrl);
+    if (!process.env.FRONTEND_URL && frontendUrl) {
+      sessionMetadata.frontendOrigin = frontendUrl;
+    }
+
+    const configuredApiBaseUrl =
+      process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+    const parsedApiBaseUrl = new URL(configuredApiBaseUrl);
+    if (
+      !['http:', 'https:'].includes(parsedApiBaseUrl.protocol) ||
+      parsedApiBaseUrl.username ||
+      parsedApiBaseUrl.password
+    ) {
+      throw new Error('API_BASE_URL must be an absolute HTTP(S) URL without credentials');
+    }
+    const apiBaseUrl = parsedApiBaseUrl.origin;
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       line_items: lineItems,
       client_reference_id: String(userId),
-      metadata: { userId: String(userId) },
-      payment_intent_data: { metadata: { userId: String(userId) } },
+      metadata: sessionMetadata,
+      payment_intent_data: {
+        metadata: sessionMetadata,
+      },
       success_url: `${apiBaseUrl}/api/checkout-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${apiBaseUrl}/api/checkout-cancelled`,
+      cancel_url: frontendCancelUrl || `${apiBaseUrl}/api/checkout-cancelled`,
     });
 
     return res.status(200).json({ url: session.url });
@@ -209,11 +356,30 @@ const checkoutSuccess = async (req, res) => {
       return res.status(400).send('Payment has not been confirmed.');
     }
 
+    const frontendReturnUrl = getFrontendReturnUrl(
+      'success',
+      session.metadata?.frontendOrigin,
+    );
     try {
-      await fulfillCartOrder(userId, paymentIntentId);
+      const checkoutType = session.metadata?.checkoutType;
+      if (checkoutType === 'cart' && session.metadata?.cartSignature) {
+        await fulfillCartOrder(userId, paymentIntentId);
+      } else if (checkoutType === 'single') {
+        await fulfillSingleOrder(
+          userId,
+          session.metadata?.productId,
+          Number(session.metadata?.quantity),
+          paymentIntentId,
+        );
+      } else {
+        throw orderError('Checkout Session is missing order details', 400);
+      }
+      if (frontendReturnUrl) {
+        return res.redirect(303, frontendReturnUrl);
+      }
       return res.status(200).send(`
         <h1>Order confirmed</h1>
-        <p>Your payment was successful and your cart order has been placed.</p>
+        <p>Your payment was successful and your order has been placed.</p>
         <p>You can return to the store.</p>
       `);
     } catch (error) {
@@ -245,9 +411,18 @@ const checkoutSuccess = async (req, res) => {
   }
 };
 
-const checkoutCancelled = (req, res) =>
-  res.status(200).send('<h1>Payment cancelled</h1><p>Your cart has not been changed.</p>');
-
+const checkoutCancelled = (req, res) => {
+  try {
+    const frontendReturnUrl = getFrontendReturnUrl('cancelled');
+    if (frontendReturnUrl) {
+      return res.redirect(303, frontendReturnUrl);
+    }
+  } catch (error) {
+    console.error('Invalid Checkout return URL:', error);
+    return res.status(500).send('Checkout return URL is not configured correctly.');
+  }
+  return res.status(200).send('<h1>Payment cancelled</h1><p>Your cart has not been changed.</p>');
+};
 
 const fetchOrders = async (req, res, next) => {
   try {
@@ -271,102 +446,48 @@ const fetchOrders = async (req, res, next) => {
   }
 };
 
-const placeOrder = async (req, res, next) => {
+const fulfillSingleOrder = async (userId, productId, quantity, paymentIntentId) => {
+  let reserved = false;
   let reservedProductId;
   let createdOrderId;
-  let paymentVerified = false;
   try {
-    const { productId, quantity, paymentIntentId } = req.body;
-    const orderQty = Number(quantity);
-    const userId = getAuthenticatedUserId(req);
-
-    if (!userId) {
-      return res.status(401).json({ message: 'Authentication required' });
-    }
-
-    if (!productId || !Number.isInteger(orderQty) || orderQty < 1) {
-      return res.status(400).json({
-        message: 'productId and quantity (positive number) are required',
-      });
-    }
-    if (!paymentIntentId) {
-      return res.status(400).json({ message: 'paymentIntentId is required' });
+    if (!productId || !Number.isInteger(quantity) || quantity < 1) {
+      throw orderError('productId and a positive integer quantity are required', 400);
     }
 
     const existingOrder = await Order.findOne({ userId, paymentIntentId });
-    if (existingOrder) {
-      return res.status(201).json({
-        message: 'Order was already placed',
-        order: existingOrder,
-      });
-    }
+    if (existingOrder) return existingOrder;
 
     const product = await findProductById(productId);
-    if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
-    }
+    if (!product) throw orderError('Product not found', 404);
 
-    const expectedAmount = Math.round(product.price * 100) * orderQty;
-    let payment;
-    try {
-      payment = await getVerifiedPaymentIntent(paymentIntentId, expectedAmount, userId);
-    } catch (error) {
-      console.error('Error verifying payment intent:', error);
-      return res.status(500).json({ message: 'Failed to verify payment intent' });
-    }
-    if (payment.error) {
-      return res.status(payment.status).json({ message: payment.error });
-    }
-    paymentVerified = true;
+    const unitAmount = getDiscountedUnitAmount(product);
+    const expectedAmount = unitAmount * quantity;
+    const payment = await getVerifiedPaymentIntent(paymentIntentId, expectedAmount, userId);
+    if (payment.error) throw orderError(payment.error, payment.status);
 
-    if (!await reserveStock(product, orderQty)) {
+    if (!await reserveStock(product, quantity)) {
       const latestProduct = await Product.findById(product._id).lean();
-      const available = latestProduct?.stock ?? 0;
-      try {
-        await stripe.refunds.create(
-          { payment_intent: paymentIntentId },
-          { idempotencyKey: `order-stock-unavailable-${paymentIntentId}` },
-        );
-      } catch (refundError) {
-        console.error('Could not refund order with unavailable stock:', refundError);
-        return res.status(502).json({ message: 'Insufficient stock and automatic refund failed' });
-      }
-      return res.status(409).json({
-        message: `Insufficient stock for ${product.title}. Only ${available} left; payment refunded.`,
-      });
+      throw orderError(
+        `Insufficient stock for ${product.title}. Only ${latestProduct?.stock ?? 0} left.`,
+        409,
+      );
     }
+    reserved = true;
     reservedProductId = product._id;
 
-    const newOrder = await Order.create({
+    const order = await Order.create({
       userId,
-      productId: product._id.toString(),
+      productId: product._id,
       title: product.title,
       imageUrl: product.imageUrl || '',
-      quantity: orderQty,
-      price: product.price,
+      quantity,
+      price: unitAmount / 100,
       paymentIntentId,
       orderedAt: new Date(),
     });
-    createdOrderId = newOrder._id;
-
-    // const productIdStr = String(productId);
-    // const cartItem = await Cart.findOne({ prodId: productIdStr });
-    // if (cartItem) {
-    //   if (cartItem.quantity <= orderQty) {
-    //     await Cart.deleteOne({ prodId: productIdStr });
-    //   } else {
-    //     cartItem.quantity -= orderQty;
-    //     await cartItem.save();
-    //   }
-    // }
-
-    // const cart = await Cart.find();
-
-    return res.status(201).json({
-      message: 'Order placed successfully',
-      order: newOrder,
-      // cart,
-    });
+    createdOrderId = order._id;
+    return order;
   } catch (error) {
     if (createdOrderId) {
       try {
@@ -375,27 +496,52 @@ const placeOrder = async (req, res, next) => {
         console.error('Could not remove incomplete order:', rollbackError);
       }
     }
-    if (reservedProductId) {
+    if (reserved) {
       try {
-        const restored = await restoreStock(reservedProductId, Number(req.body.quantity));
-        if (!restored) console.error(`Could not restore reserved stock for product ${reservedProductId}`);
+        const restored = await restoreStock(reservedProductId, quantity);
+        if (!restored) console.error(`Could not restore reserved stock for product ${productId}`);
       } catch (rollbackError) {
         console.error('Could not restore reserved stock:', rollbackError);
       }
     }
-    if (paymentVerified) {
-      try {
-        await stripe.refunds.create(
-          { payment_intent: req.body.paymentIntentId },
-          { idempotencyKey: `order-fulfillment-failed-${req.body.paymentIntentId}` },
-        );
-      } catch (refundError) {
-        console.error('Could not refund failed order fulfillment:', refundError);
-      }
-    }
+    throw error;
+  }
+};
+
+const placeOrder = async (req, res) => {
+  const userId = getAuthenticatedUserId(req);
+  if (!userId) {
+    return res.status(401).json({ message: 'Authentication required' });
+  }
+  const { productId, quantity, paymentIntentId } = req.body || {};
+  if (!paymentIntentId) {
+    return res.status(400).json({ message: 'paymentIntentId is required' });
+  }
+
+  try {
+    const order = await fulfillSingleOrder(
+      userId,
+      productId,
+      Number(quantity),
+      paymentIntentId,
+    );
+    return res.status(201).json({ message: 'Order placed successfully', order });
+  } catch (error) {
     console.error('Error placing order:', error);
-    return res.status(500).json({
-      message: 'Failed to place order',
+    let refunded = false;
+    try {
+      refunded = await refundUnfulfilledPaymentIntent(
+        paymentIntentId,
+        userId,
+        `order-fulfillment-failed-${paymentIntentId}`,
+      );
+    } catch (refundError) {
+      console.error('Could not refund failed order fulfillment:', refundError);
+    }
+    return res.status(error.statusCode || 500).json({
+      message: refunded
+        ? `Order could not be placed. Payment refunded: ${error.message}`
+        : error.statusCode ? error.message : 'Failed to place order',
       error: error.message,
     });
   }
@@ -440,12 +586,18 @@ const fulfillCartOrder = async (userId, paymentIntentId) => {
     }
 
     const expectedAmount = resolved.reduce(
-      (total, { product, quantity }) =>       total + Math.round(product.price * 100) * quantity,
+      (total, { product, quantity }) =>
+        total + getDiscountedUnitAmount(product) * quantity,
       0,
     );
     let payment;
     try {
-      payment = await getVerifiedPaymentIntent(paymentIntentId, expectedAmount, userId);
+      payment = await getVerifiedPaymentIntent(
+        paymentIntentId,
+        expectedAmount,
+        userId,
+        getCartSignature(resolved),
+      );
     } catch (error) {
       console.error('Error verifying payment intent for cart order:', error);
       throw orderError('Failed to verify payment intent', 500);
@@ -474,7 +626,7 @@ const fulfillCartOrder = async (userId, paymentIntentId) => {
         title: product.title,
         imageUrl: product.imageUrl || '',
         quantity,
-        price: product.price,
+        price: getDiscountedUnitAmount(product) / 100,
         paymentIntentId,
         orderedAt,
       });
@@ -492,12 +644,20 @@ const fulfillCartOrder = async (userId, paymentIntentId) => {
     };
   } catch (error) {
     if (createdOrderIds.length > 0) {
-      await Order.deleteMany({ _id: { $in: createdOrderIds } });
+      try {
+        await Order.deleteMany({ _id: { $in: createdOrderIds } });
+      } catch (rollbackError) {
+        console.error('Could not remove incomplete cart orders:', rollbackError);
+      }
     }
     for (const { productId, quantity } of reservedProducts) {
-      const restored = await restoreStock(productId, quantity);
-      if (!restored) {
-        console.error(`Could not restore reserved stock for product ${productId}`);
+      try {
+        const restored = await restoreStock(productId, quantity);
+        if (!restored) {
+          console.error(`Could not restore reserved stock for product ${productId}`);
+        }
+      } catch (rollbackError) {
+        console.error(`Could not restore reserved stock for product ${productId}:`, rollbackError);
       }
     }
     throw error;
@@ -718,7 +878,6 @@ const processReturnRequest = async (req, res) => {
     return res.status(500).json({ message: 'Failed to process return request', error: error.message });
   }
 };
-
 
 module.exports = {
   placeCartOrder,

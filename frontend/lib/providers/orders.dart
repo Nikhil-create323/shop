@@ -26,7 +26,11 @@ class OrdersNotifier extends Notifier<List<Order>> {
     }
   }
 
-  Future<void> placeOrder(String productId, int quantity, {String? paymentIntentId}) async {
+  Future<void> placeOrder(
+    String productId,
+    int quantity, {
+    String? paymentIntentId,
+  }) async {
     await _ensureLoggedIn();
 
     final url = Uri.parse('$baseUrl/placeOrder');
@@ -46,9 +50,11 @@ class OrdersNotifier extends Notifier<List<Order>> {
       final orderJson = responseData['order'] as Map<String, dynamic>;
       final newOrder = Order.fromJson(orderJson);
 
-      state = [newOrder, ...state];
+      state = [newOrder, ...state.where((order) => order.id != newOrder.id)];
 
-      await ref.read(productProvider.notifier).fetchProducts(syncInventory: false);
+      await ref
+          .read(productProvider.notifier)
+          .fetchProducts(syncInventory: false);
 
       final cartJson = responseData['cart'] as List<dynamic>?;
       ref.read(cartProvider.notifier).syncFromServerCart(cartJson);
@@ -64,7 +70,9 @@ class OrdersNotifier extends Notifier<List<Order>> {
     final response = await http.post(
       url,
       headers: await _headers(),
-      body: jsonEncode({ if (paymentIntentId != null) 'paymentIntentId': paymentIntentId }),
+      body: jsonEncode({
+        if (paymentIntentId != null) 'paymentIntentId': paymentIntentId,
+      }),
     );
 
     final responseData = jsonDecode(response.body) as Map<String, dynamic>;
@@ -75,9 +83,15 @@ class OrdersNotifier extends Notifier<List<Order>> {
           .map((o) => Order.fromJson(o as Map<String, dynamic>))
           .toList();
 
-      state = [...newOrders, ...state];
+      final newOrderIds = newOrders.map((order) => order.id).toSet();
+      state = [
+        ...newOrders,
+        ...state.where((order) => !newOrderIds.contains(order.id)),
+      ];
 
-      await ref.read(productProvider.notifier).fetchProducts(syncInventory: false);
+      await ref
+          .read(productProvider.notifier)
+          .fetchProducts(syncInventory: false);
 
       final cartJson = responseData['cart'] as List<dynamic>?;
       ref.read(cartProvider.notifier).syncFromServerCart(cartJson);
@@ -103,6 +117,34 @@ class OrdersNotifier extends Notifier<List<Order>> {
       throw Exception('Failed to fetch orders: ${response.body}');
     }
   }
+
+  Future<void> _updateOrderStatus(String orderId, String endpoint) async {
+    await _ensureLoggedIn();
+    final response = await http.post(
+      Uri.parse('$baseUrl/$endpoint/$orderId'),
+      headers: await _headers(),
+    );
+    final responseData = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(responseData['message'] ?? 'Order update failed');
+    }
+
+    final updatedOrder = Order.fromJson(
+      responseData['order'] as Map<String, dynamic>,
+    );
+    state = state
+        .map((order) => order.id == updatedOrder.id ? updatedOrder : order)
+        .toList();
+    await ref
+        .read(productProvider.notifier)
+        .fetchProducts(syncInventory: false);
+  }
+
+  Future<void> cancelOrder(String orderId) =>
+      _updateOrderStatus(orderId, 'cancelOrder');
+
+  Future<void> requestReturn(String orderId) =>
+      _updateOrderStatus(orderId, 'requestReturn');
 }
 
 final ordersProvider = NotifierProvider<OrdersNotifier, List<Order>>(

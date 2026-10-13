@@ -6,6 +6,7 @@ class Order {
   final int quantity;
   final double price;
   final DateTime? orderedAt;
+  final String status;
 
   Order({
     required this.id,
@@ -15,6 +16,7 @@ class Order {
     required this.quantity,
     required this.price,
     this.orderedAt,
+    this.status = 'placed',
   });
 
   double get lineTotal => price * quantity;
@@ -33,6 +35,7 @@ class Order {
       orderedAt: json['orderedAt'] != null
           ? DateTime.tryParse(json['orderedAt'].toString())
           : null,
+      status: json['status']?.toString() ?? 'placed',
     );
   }
 
@@ -43,6 +46,7 @@ class Order {
       'imageUrl': imageUrl,
       'quantity': quantity,
       'price': price,
+      'status': status,
       if (orderedAt != null) 'orderedAt': orderedAt!.toIso8601String(),
     };
   }

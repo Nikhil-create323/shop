@@ -20,6 +20,14 @@ class AuthService {
     return await storage.read(key: 'name');
   }
 
+  static Future<String?> getRole() async {
+    final token = await getToken();
+    if (token == null || JwtDecoder.isExpired(token)) return null;
+
+    final decoded = JwtDecoder.decode(token);
+    return decoded['role']?.toString();
+  }
+
   static Future<bool> isLoggedIn() async {
     final token = await getToken();
     if (token == null) return false;

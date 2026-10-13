@@ -1,6 +1,5 @@
 // 1. ENVIRONMENT CONFIGURATION
 require('dotenv').config();
-// const Mailer = require('./utils/mailer.js');
 const dns = require('dns');
 
 dns.setDefaultResultOrder("ipv4first");
@@ -10,22 +9,16 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
-// const jwt = require('jsonwebtoken');
 const { google } = require('googleapis');
 
 // 3. LOCAL MODELS & ROUTES
-// const User = require('./models/user.js');
-// const Cart = require('./models/cart.js');
 const userRoutes = require('./routes/user.js');
 
 // 4. APP INITIALIZATION & CONSTANTS
 const app = express();
-// const SECRET_KEY = "secret key";
-
-
+app.set('trust proxy', 1);
 
 // 5. MIDDLEWARE
-// app.set('trust proxy', 1);
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 120,
@@ -33,6 +26,7 @@ const globalLimiter = rateLimit({
   legacyHeaders: false,
   message: { message: 'Too many requests from this IP, please try again later.' },
 });
+
 
 app.use(cors()); // Handles Cross-Origin Resource Sharing
 app.use(cors({ origin: '*' }));
@@ -46,37 +40,35 @@ const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_REDIRECT_URI,
 );
 
-app.get('/oauth2callback', async (req, res) => {
-  const code = req.query.code;
 
-  if (!code) {
-    return res.status(400).send('<h1>Missing code</h1><p>The authorization code is required.</p>');
-  }
 
-  try {
-    const { tokens } = await oAuth2Client.getToken(code);
-    const refreshToken = tokens.refresh_token || 'No refresh token returned';
+// app.get('/oauth2callback', async (req, res) => {
+//   const code = req.query.code;
 
-    return res.send(`
-      <h1>Google OAuth2 Callback</h1>
-      <p><strong>Refresh Token:</strong></p>
-      <pre>${refreshToken}</pre>
-      <p><strong>Full Token Response:</strong></p>
-      <pre>${JSON.stringify(tokens, null, 2)}</pre>
-    `);
-  } catch (error) {
-    console.error('oauth2callback error:', error);
-    return res.status(500).send(`<h1>Token exchange failed</h1><pre>${error.message}</pre>`);
-  }
-});
+//   if (!code) {
+//     return res.status(400).send('<h1>Missing code</h1><p>The authorization code is required.</p>');
+//   }
 
-// const gmailController = require('./controllers/gmail.js');
+//   try {
+//     const { tokens } = await oAuth2Client.getToken(code);
+//     const refreshToken = tokens.refresh_token || 'No refresh token returned';
 
+//     return res.send(`
+//       <h1>Google OAuth2 Callback</h1>
+//       <p><strong>Refresh Token:</strong></p>
+//       <pre>${refreshToken}</pre>
+//       <p><strong>Full Token Response:</strong></p>
+//       <pre>${JSON.stringify(tokens, null, 2)}</pre>
+//     `);
+//   } catch (error) {
+//     console.error('oauth2callback error:', error);
+//     return res.status(500).send(`<h1>Token exchange failed</h1><pre>${error.message}</pre>`);
+//   }
+// });
 
 app.use(userRoutes); // Injected User Routes
 
 // 9. DATABASE CONNECTION & SERVER START
-// const password = encodeURIComponent(process.env.MONGODB_PASSWORD);
 const PORT = process.env.PORT;
 
 mongoose

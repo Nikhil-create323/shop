@@ -26,7 +26,6 @@ const assistantLimiter = rateLimit({
   message: { message: 'Too many assistant requests. Please wait a minute and try again.' },
 });
 
-
 // Define your route on the 'router' object
 router.post(
   '/login',
@@ -66,6 +65,7 @@ router.post(
     return userController.signUp(req, res, next);
   },
 );
+
 // router.get("/oauth2callback", async (req, res) => {
 //   const code = req.query.code;
 
@@ -93,8 +93,6 @@ router.post('/api/google-auth', authLimiter, userController.googleAuth);
 router.post('/forgot-password', authLimiter, userController.forgotPassword);
 router.post('/reset-password', authLimiter, userController.resetPassword);
 // router.post('/change-password', userController.changePassword);
-
-
 
 router.post('/addRating/:productId', ratingController.addRating);
 router.get('/api/rating/:productId', ratingController.fetchRatings);

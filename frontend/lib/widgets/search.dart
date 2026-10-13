@@ -2,10 +2,14 @@ import 'dart:async';
 
 import 'package:dummy_apps/model/product.dart';
 import 'package:dummy_apps/providers/products_provider.dart';
-import 'package:dummy_apps/screens/details.dart';
+import 'package:dummy_apps/screens/Auth.dart';
+import 'package:dummy_apps/screens/Shop.dart';
+import 'package:dummy_apps/screens/cart.dart';
+import 'package:dummy_apps/screens/orders.dart';
+import 'package:dummy_apps/screens/search-result.dart';
+import 'package:dummy_apps/utils/auth-service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:dummy_apps/widgets/drawer.dart';
 
 class ProductSearch extends ConsumerStatefulWidget {
   const ProductSearch({super.key});
@@ -29,58 +33,106 @@ class _ProductSearchState extends ConsumerState<ProductSearch> {
 
   void _onSearchChanged(String value) {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 300), () {
+    _debounce = Timer(const Duration(milliseconds: 200), () {
       if (!mounted) return;
       setState(() {
-        searchQuery = value;
+        searchQuery = value.trim();
       });
     });
   }
 
-  List<Product> _getFilteredProducts(String searchQuery) {
+  List<Product> _getSuggestions(String query) {
+    final trimmedQuery = query.trim();
+    if (trimmedQuery.isEmpty) return const [];
+
     final products = ref.watch(productProvider);
+    final lowerQuery = trimmedQuery.toLowerCase();
 
-    final filteredProductsStartingWithQuery = products.where((product) {
+    final startsWith = products.where((product) {
       final title = product.title.toLowerCase();
-      final query = searchQuery.toLowerCase();
-
-      return title.startsWith(query);
+      return title.startsWith(lowerQuery);
     }).toList();
 
-    final filteredProductsContainingQuery = products.where((product) {
+    final contains = products.where((product) {
       final title = product.title.toLowerCase();
-      final query = searchQuery.toLowerCase();
-
-      return title.contains(query) && !title.startsWith(query);
+      return title.contains(lowerQuery) && !title.startsWith(lowerQuery);
     }).toList();
 
-    return filteredProductsStartingWithQuery + filteredProductsContainingQuery;
+    return [...startsWith, ...contains];
+  }
+
+  void _submitSearch([String? explicitQuery]) {
+    final query = (explicitQuery ?? _controller.text).trim();
+    if (query.isEmpty) return;
+
+    FocusScope.of(context).unfocus();
+    final filteredProducts = _getSuggestions(query);
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            SearchResultsScreen(query: query, products: filteredProducts),
+      ),
+    );
+  }
+
+  Future<void> _handleMenuSelection(String value) async {
+    switch (value) {
+      case 'home':
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => Shop()),
+        );
+        break;
+      case 'cart':
+        if (!await AuthService.isLoggedIn()) {
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Please login to view cart')),
+          );
+          return;
+        }
+        if (!context.mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const CartWidget()),
+        );
+        break;
+      case 'orders':
+        if (!context.mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const Orders()),
+        );
+        break;
+      case 'account':
+        if (!context.mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const AuthScreen()),
+        );
+        break;
+      case 'logout':
+        await AuthService.clear();
+        if (!context.mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => Shop()),
+        );
+        break;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // final products = ref.watch(productProvider);
-
-    // Prefix filter
-    // final filteredProducts = products.where((product) {
-    //   final title = product.title.toLowerCase();
-    //   final query = searchQuery.toLowerCase();
-
-    //   return title.startsWith(query);
-    // }).toList();
-    final filteredProducts = _getFilteredProducts(searchQuery);
     return Scaffold(
-      drawer: AppDrawer(),
       appBar: AppBar(
-        leading: Builder(
-          builder: (context) => IconButton(
-            icon: const Icon(Icons.menu),
-            onPressed: () => Scaffold.of(context).openDrawer(),
-          ),
-        ),
         title: TextField(
           controller: _controller,
           autofocus: true,
+          textInputAction: TextInputAction.search,
+          onSubmitted: (_) => _submitSearch(),
           decoration: const InputDecoration(
             hintText: 'Search products...',
             border: InputBorder.none,
@@ -93,45 +145,62 @@ class _ProductSearchState extends ConsumerState<ProductSearch> {
               icon: const Icon(Icons.clear),
               onPressed: () {
                 _controller.clear();
-
                 setState(() {
                   searchQuery = '';
                 });
               },
             ),
+          IconButton(
+            icon: const Icon(Icons.search),
+            onPressed: () => _submitSearch(),
+          ),
+          PopupMenuButton<String>(
+            onSelected: _handleMenuSelection,
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'home', child: Text('Home')),
+              PopupMenuItem(value: 'cart', child: Text('Cart')),
+              PopupMenuItem(value: 'orders', child: Text('Orders')),
+              PopupMenuItem(value: 'account', child: Text('Account')),
+            ],
+          ),
         ],
       ),
-      body: filteredProducts.isEmpty
-          ? const Center(child: Text('No matching products found'))
-          : ListView.builder(
-              itemCount: filteredProducts.length,
-              itemBuilder: (context, index) {
-                final Product prod = filteredProducts[index];
+      body: searchQuery.isEmpty
+          ? const Center(child: Text('Type a product name and press search'))
+          : _buildSuggestions(),
+    );
+  }
 
-                return ListTile(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => Details(product: prod)),
-                    );
-                  },
+  Widget _buildSuggestions() {
+    final suggestions = _getSuggestions(searchQuery);
 
-                  leading: prod.imageUrl.isNotEmpty
-                      ? Image.network(
-                          prod.imageUrl,
-                          width: 60,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) =>
-                              const Icon(Icons.image_not_supported),
-                        )
-                      : const Icon(Icons.shopping_bag),
+    if (suggestions.isEmpty) {
+      return const Center(child: Text('No matching products found'));
+    }
 
-                  title: Text(prod.title),
+    return ListView.builder(
+      itemCount: suggestions.length,
+      itemBuilder: (context, index) {
+        final product = suggestions[index];
 
-                  subtitle: Text('₹ ${prod.price}'),
-                );
-              },
-            ),
+        return ListTile(
+          leading: product.imageUrl.isNotEmpty
+              ? Image.network(
+                  product.imageUrl,
+                  width: 50,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) =>
+                      const Icon(Icons.image_not_supported),
+                )
+              : const Icon(Icons.shopping_bag),
+          title: Text(product.title),
+          subtitle: Text('₹ ${product.price}'),
+          onTap: () {
+            _controller.text = product.title;
+            _submitSearch(product.title);
+          },
+        );
+      },
     );
   }
 }
