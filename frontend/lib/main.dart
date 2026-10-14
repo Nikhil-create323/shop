@@ -48,7 +48,7 @@ Future<String> getDynamicBaseUrl() async {
     AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
     if (androidInfo.isPhysicalDevice) {
       // Physical Android Device -> Use your computer's local network IP
-      return 'http://192.168.1.X:3000';
+      return 'http://10.173.221.66:3000';
     } else {
       // Android Emulator
       return 'http://10.0.2.2:3000';
@@ -59,7 +59,7 @@ Future<String> getDynamicBaseUrl() async {
     IosDeviceInfo iosInfo = await deviceInfo.iosInfo;
     if (iosInfo.isPhysicalDevice) {
       // Physical iOS Device -> Use your computer's local network IP
-      return 'http://192.168.1.X:3000';
+      return 'http://172.30.80.1:3000';
     } else {
       // iOS Simulator
       return 'http://localhost:3000';
